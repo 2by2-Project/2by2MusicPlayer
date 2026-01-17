@@ -237,17 +237,22 @@ fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
         val music = Midi1Music().apply { read(bytes) }
 
         // Detect CC #111 loop point (RPG Maker)
-        val loopPointTick = music
-            .filterEvents { e ->
+        var loopPointTick: Int? = null
+        for (track in music.tracks) {
+            var tick = 0
+            for (e in track.events) {
+                tick += e.deltaTime
                 val m = e.message
-                ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC) &&
-                        (m.msb.toInt() == 111)
+                val isCC = ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC)
+                if (isCC && m.msb.toInt() == 111) {
+                    loopPointTick = when (loopPointTick) {
+                        null -> tick
+                        else -> minOf(loopPointTick!!, tick)
+                    }
+                }
             }
-            .firstOrNull()
-            ?.deltaTime
-            ?: -1
-
-        if (loopPointTick != -1) {
+        }
+        if (loopPointTick != null) {
             // For detect SMPTE division
             val hasSMPTEDivision = music.deltaTimeSpec < 0
 
@@ -266,14 +271,8 @@ fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
         var endOfTrackTick = -1
         for (track in music.tracks) {
             var tick = 0
-            for (e in track.events) {
-                tick += e.deltaTime
-                val m = e.message
-
-                if (m.statusByte == 0xFF.toByte()) {
-                    endOfTrackTick = endOfTrackTick.coerceAtLeast(tick) ?: tick
-                }
-            }
+            for (e in track.events) tick += e.deltaTime
+            endOfTrackTick = maxOf(endOfTrackTick, tick)
         }
         endOfTrackMs = music.getTimePositionInMillisecondsForTick(endOfTrackTick).toLong()
     }
