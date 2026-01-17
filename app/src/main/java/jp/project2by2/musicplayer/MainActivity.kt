@@ -2,14 +2,12 @@ package jp.project2by2.musicplayer
 
 import android.media.MediaPlayer
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 
 import dev.atsushieno.ktmidi.*
@@ -42,10 +39,9 @@ import android.content.Context
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 
 import kotlinx.coroutines.delay
-import java.io.File
-import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.io.path.Path
+
+// 音楽をループさせる用
+data class LoopPoint(val startMs: Long = -1L, val endMs: Long = -1L)
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -85,16 +81,29 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     // MediaPlayer
     val mediaPlayer = remember { MediaPlayer() }
     var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
-    var currentPosition by remember { mutableStateOf(0) }
-    var loopPoint by remember { mutableStateOf(0) }
+    var currentPositionMs by remember { mutableStateOf(0L) }
+    var loopStartMs: Long by remember { mutableStateOf(0L) }
+    var loopEndMs: Long by remember { mutableStateOf(0L) }
 
     // 再生位置取得用
     LaunchedEffect(mediaPlayer, selectedFileUri) {
         while (true) {
             if (mediaPlayer.isPlaying) {
-                currentPosition = mediaPlayer.currentPosition
+                currentPositionMs = mediaPlayer.currentPosition.toLong()
+
+                // ループ処理
+                if (loopEndMs != -1L && currentPositionMs >= loopEndMs) {
+                    if (loopStartMs != -1L) {
+                        // ループポイントがあれば飛ぶ（-50msぐらい前）
+                        mediaPlayer.seekTo(loopStartMs.toInt() - 50)
+                    } else {
+                        // ループポイントがなければ最初へ
+                        mediaPlayer.seekTo(0)
+                    }
+                }
             }
-            delay(100L) // 100ミリ秒ごとに更新
+
+            delay(50L) // 50ミリ秒ごとに更新
         }
     }
 
@@ -116,7 +125,27 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                 mediaPlayer.setDataSource(context, it)
                 mediaPlayer.prepareAsync()
 
-                loopPoint = findLoopPoint(context, selectedFileUri!!)
+                // ループポイントを検知
+                val loopPoint = findLoopPointMs(context, selectedFileUri!!)
+                loopStartMs = loopPoint.startMs
+                loopEndMs = loopPoint.endMs
+
+                // 再生が完了したとき
+                /* mediaPlayer.setOnCompletionListener { mp ->
+                    // ループポイントが検出されればそこまで戻る
+                    if (loopPointMs < 0L) {
+                        currentPositionMs = loopPointMs
+                    } else {
+                        currentPositionMs = 0L  // ループポイントがなければ最初に戻る
+                    }
+
+                    try {
+                        mp.stop()
+                        mp.prepareAsync()
+                    } catch (e: IllegalStateException) {
+                        e.printStackTrace()
+                    }
+                } */
             } catch (e: Exception) {
                 // ファイル読み込み中のエラー処理
                 e.printStackTrace()
@@ -135,14 +164,21 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 
         // --- 追加：再生時間を表示するText ---
         Text(
-            text = "Position: ${currentPosition / 1000}.${(currentPosition % 1000).toString().padStart(3, '0')} s",
+            text = "Position: $currentPositionMs ms",
             modifier = Modifier.padding(bottom = 16.dp),
             style = MaterialTheme.typography.bodySmall
         )
 
         // Loop point
         Text(
-            text = "Loop point: ${loopPoint} s",
+            text = "Loop point: $loopStartMs ms",
+            modifier = Modifier.padding(bottom = 16.dp),
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        // End point
+        Text(
+            text = "End of track: $loopEndMs ms",
             modifier = Modifier.padding(bottom = 16.dp),
             style = MaterialTheme.typography.bodySmall
         )
@@ -185,36 +221,62 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 }
 
 // CC #111 のイベント時間を探す関数
-fun findLoopPoint(context: Context, uri: Uri): Int {
+fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
     val contentResolver = context.contentResolver
 
-    // URIから入力ストリームを取得
+    // Loop points
+    var loopPointMs : Long = -1L
+    var endOfTrackMs : Long = -1L
+
+    // Get stream from uri
     contentResolver.openInputStream(uri)?.use { inputStream ->
-        // バイト列に変換
+        // Read bytes from input stream
         val bytes = inputStream.readAllBytes().toList()
 
-        // ktmidiでMIDIデータを読み込む
-        val musicReader = Midi1Music()
-        musicReader.read(bytes)
+        // Read MIDI file using ktmidi
+        val music = Midi1Music().apply { read(bytes) }
 
-        // トラックごとに走査
-        val tracks = musicReader.tracks
-        for (track in tracks) {
-            // イベントごとに走査
-            val events = track.events
-            for (event in events) {
-                // メッセージを抜き出す
-                val message = event.message
+        // Detect CC #111 loop point (RPG Maker)
+        val loopPointTick = music
+            .filterEvents { e ->
+                val m = e.message
+                ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC) &&
+                        (m.msb.toInt() == 111)
+            }
+            .firstOrNull()
+            ?.deltaTime
+            ?: -1
 
-                // コントロールチェンジ111のみ取り出す
-                if ((message.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC) {
-                    if (message.msb == 111.toByte()) {
-                        return event.deltaTime
-                    }
+        if (loopPointTick != -1) {
+            // For detect SMPTE division
+            val hasSMPTEDivision = music.deltaTimeSpec < 0
+
+            // Convert tick to ms
+            loopPointMs = if (hasSMPTEDivision) {
+                (Midi1Music.getSmpteDurationInSeconds(
+                    music.deltaTimeSpec,
+                    loopPointTick
+                ) * 1000.0).toLong()
+            } else {
+                music.getTimePositionInMillisecondsForTick(loopPointTick).toLong()
+            }
+        }
+
+        // Detect end of track point
+        var endOfTrackTick = -1
+        for (track in music.tracks) {
+            var tick = 0
+            for (e in track.events) {
+                tick += e.deltaTime
+                val m = e.message
+
+                if (m.statusByte == 0xFF.toByte()) {
+                    endOfTrackTick = endOfTrackTick.coerceAtLeast(tick) ?: tick
                 }
             }
         }
+        endOfTrackMs = music.getTimePositionInMillisecondsForTick(endOfTrackTick).toLong()
     }
 
-    return 0  // なければ0ms
+    return LoopPoint(loopPointMs, endOfTrackMs)
 }
