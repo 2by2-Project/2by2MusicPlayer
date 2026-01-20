@@ -47,7 +47,15 @@ import kotlinx.coroutines.delay
 import java.io.File
 
 // 音楽をループさせる用
-data class LoopPoint(val startMs: Long = -1L, val endMs: Long = -1L)
+data class LoopPoint(
+    // Milliseconds
+    var startMs: Long = 0L,
+    var endMs: Long = -1L,
+
+    // MIDI Tick
+    var startTick: Int = 0,
+    var endTick: Int = -1,
+)
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -94,6 +102,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     var loopStartMs: Long by remember { mutableStateOf(0L) }
     var loopEndMs: Long by remember { mutableStateOf(0L) }
 
+    // Sync
+    var syncProc: BASS.SYNCPROC? = null
+    var syncHandle: Int = 0
+
     // Init BASSMIDI
     LaunchedEffect(Unit) {
         val ok = bassInit()
@@ -135,10 +147,6 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             }
             selectedMidiFileUri = it
             try {
-                // OpenDocument
-                //val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-                //context.contentResolver.takePersistableUriPermission(uri, takeFlags)
-
                 // Load MIDI file
                 val cacheMidiFile = File(context.cacheDir, "midi.mid")
                 context.contentResolver.openInputStream(selectedMidiFileUri!!)?.use { input ->
@@ -158,30 +166,43 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                 handles = bassLoadMidiWithSoundFont(midiPath, sfPath)
 
                 // ループポイントを検知
-                val loopPoint = findLoopPointMs(context, selectedMidiFileUri!!)
+                val loopPoint = findLoopPoint(context, selectedMidiFileUri!!)
+
+                // ミリ秒の位置をテキストに反映
                 loopStartMs = loopPoint.startMs
-                loopEndMs = loopPoint.endMs
-                if (loopStartMs != -1L && loopEndMs != -1L) {
-                    // Set the loop flag
-                    BASS.BASS_ChannelFlags(handles!!.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
 
-                    // Enable decay flag
-                    BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
-                    BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+                // Convert bytes to seconds
+                val bytes = BASS.BASS_ChannelGetLength(handles!!.stream, BASS.BASS_POS_BYTE)
+                val secs = BASS.BASS_ChannelBytes2Seconds(handles!!.stream, bytes) * 1000
+                loopEndMs = secs.toLong()  // loopPoint.endMs
 
-                    // Convert seconds to bytes
-                    val startSecs = BASS.BASS_ChannelSeconds2Bytes(handles!!.stream, (loopStartMs.toDouble() - 50) / 1000)
-                    BASS.BASS_ChannelSetPosition(handles!!.stream, startSecs, BASS.BASS_POS_LOOP)
-                    //val endSecs = BASS.BASS_ChannelSeconds2Bytes(handles!!.stream, loopStartMs.toDouble() / 1000)
-                    //BASS.BASS_ChannelSetPosition(handles!!.stream, endSecs, BASS.BASS_POS_END)
-                } else {
-                    // Remove the loop flag
-                    BASS.BASS_ChannelFlags(handles!!.stream, 0, BASS.BASS_SAMPLE_LOOP)
+                // Set the loop flag
+                BASS.BASS_ChannelFlags(handles!!.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
 
-                    // Disable decay flag
-                    BASS.BASS_ChannelFlags(handles!!.stream, 0, BASSMIDI.BASS_MIDI_DECAYSEEK)
-                    BASS.BASS_ChannelFlags(handles!!.stream, 0, BASSMIDI.BASS_MIDI_DECAYEND)
+                // Enable decay flag
+                BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
+                BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+
+                // Setup BASS sync feature for looping
+                syncProc = null
+                if (syncHandle != 0) {
+                    BASS.BASS_ChannelRemoveSync(handles!!.stream, syncHandle)
+                    syncHandle = 0
                 }
+                syncProc = BASS.SYNCPROC { handle, channel, data, user ->
+                    BASS.BASS_ChannelSetPosition(
+                        handles!!.stream,
+                        loopPoint.startTick.toLong(),
+                        BASSMIDI.BASS_POS_MIDI_TICK or BASSMIDI.BASS_MIDI_DECAYSEEK
+                    )
+                }
+                syncHandle = BASS.BASS_ChannelSetSync(
+                    handles!!.stream,
+                    BASS.BASS_SYNC_MIXTIME,
+                    bytes,
+                    syncProc,
+                    0
+                )
             } catch (e: Exception) {
                 // ファイル読み込み中のエラー処理
                 e.printStackTrace()
@@ -268,12 +289,11 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 }
 
 // CC #111 のイベント時間を探す関数
-fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
+fun findLoopPoint(context: Context, uri: Uri): LoopPoint {
     val contentResolver = context.contentResolver
 
-    // Loop points
-    var loopPointMs : Long = -1L
-    var endOfTrackMs : Long = -1L
+    // Loop point
+    val loopPoint = LoopPoint()
 
     // Get stream from uri
     contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -284,7 +304,6 @@ fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
         val music = Midi1Music().apply { read(bytes) }
 
         // Detect CC #111 loop point (RPG Maker)
-        var loopPointTick: Int? = null
         for (track in music.tracks) {
             var tick = 0
             for (e in track.events) {
@@ -292,39 +311,22 @@ fun findLoopPointMs(context: Context, uri: Uri): LoopPoint {
                 val m = e.message
                 val isCC = ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC)
                 if (isCC && m.msb.toInt() == 111) {
-                    loopPointTick = when (loopPointTick) {
-                        null -> tick
-                        else -> minOf(loopPointTick!!, tick)
-                    }
+                    loopPoint.startTick = tick
+                    loopPoint.startMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
                 }
-            }
-        }
-        if (loopPointTick != null) {
-            // For detect SMPTE division
-            val hasSMPTEDivision = music.deltaTimeSpec < 0
-
-            // Convert tick to ms
-            loopPointMs = if (hasSMPTEDivision) {
-                (Midi1Music.getSmpteDurationInSeconds(
-                    music.deltaTimeSpec,
-                    loopPointTick
-                ) * 1000.0).toLong()
-            } else {
-                music.getTimePositionInMillisecondsForTick(loopPointTick).toLong()
             }
         }
 
         // Detect end of track point
-        var endOfTrackTick = -1
         for (track in music.tracks) {
             var tick = 0
             for (e in track.events) tick += e.deltaTime
-            endOfTrackTick = maxOf(endOfTrackTick, tick)
+            loopPoint.endTick = tick
+            loopPoint.endMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
         }
-        endOfTrackMs = music.getTimePositionInMillisecondsForTick(endOfTrackTick).toLong()
     }
 
-    return LoopPoint(loopPointMs, endOfTrackMs)
+    return loopPoint
 }
 
 data class MidiHandles(
