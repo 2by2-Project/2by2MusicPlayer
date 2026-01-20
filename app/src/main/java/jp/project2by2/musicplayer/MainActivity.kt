@@ -165,6 +165,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                     // Set the loop flag
                     BASS.BASS_ChannelFlags(handles!!.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
 
+                    // Enable decay flag
+                    BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
+                    BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+
                     // Convert seconds to bytes
                     val startSecs = BASS.BASS_ChannelSeconds2Bytes(handles!!.stream, (loopStartMs.toDouble() - 50) / 1000)
                     BASS.BASS_ChannelSetPosition(handles!!.stream, startSecs, BASS.BASS_POS_LOOP)
@@ -173,6 +177,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                 } else {
                     // Remove the loop flag
                     BASS.BASS_ChannelFlags(handles!!.stream, 0, BASS.BASS_SAMPLE_LOOP)
+
+                    // Disable decay flag
+                    BASS.BASS_ChannelFlags(handles!!.stream, 0, BASSMIDI.BASS_MIDI_DECAYSEEK)
+                    BASS.BASS_ChannelFlags(handles!!.stream, 0, BASSMIDI.BASS_MIDI_DECAYEND)
                 }
             } catch (e: Exception) {
                 // ファイル読み込み中のエラー処理
