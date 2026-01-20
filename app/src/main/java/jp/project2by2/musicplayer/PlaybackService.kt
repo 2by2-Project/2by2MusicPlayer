@@ -142,6 +142,14 @@ class PlaybackService : Service() {
         return (secs * 1000.0).toLong()
     }
 
+    fun setCurrentPositionMs(ms: Long) {
+        val h = handles ?: return
+        val secs = ms.coerceAtLeast(0L).toDouble() / 1000.0
+        val bytes = BASS.BASS_ChannelSeconds2Bytes(h.stream, secs)
+        BASS.BASS_ChannelSetPosition(h.stream, bytes, BASS.BASS_POS_BYTE)
+        updateNotification()
+    }
+
     fun getDurationMs(): Long {
         val h = handles ?: return 0L
         val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
