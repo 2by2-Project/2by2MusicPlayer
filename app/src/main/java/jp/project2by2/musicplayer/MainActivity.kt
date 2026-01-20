@@ -38,6 +38,7 @@ import com.un4seen.bass.BASSMIDI
 import dev.atsushieno.ktmidi.*
 import dev.atsushieno.ktmidi.read
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
 
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
@@ -125,7 +126,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 
     // MIDI file picker
     val MidiFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             if (selectedSoundFontUri == null) {
@@ -134,6 +135,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             }
             selectedMidiFileUri = it
             try {
+                // OpenDocument
+                //val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                //context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+
                 // Load MIDI file
                 val cacheMidiFile = File(context.cacheDir, "midi.mid")
                 context.contentResolver.openInputStream(selectedMidiFileUri!!)?.use { input ->
@@ -221,7 +226,16 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            ElevatedButton(onClick = { MidiFilePicker.launch("audio/midi") }) {
+            ElevatedButton(onClick = {
+                MidiFilePicker.launch(
+                    arrayOf(
+                        "audio/midi",
+                        "audio/x-midi",
+                        "audio/mid",
+                        "application/x-midi"
+                    )
+                )
+            }) {
                 Text("Browse")
             }
             ElevatedButton(
