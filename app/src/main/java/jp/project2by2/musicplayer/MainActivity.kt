@@ -259,7 +259,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         bottomBar = {
             AnimatedVisibility(visible = selectedMidiFileUri != null) {
                 MiniPlayerBar(
-                    title = selectedMidiFileUri?.lastPathSegment?.split("/")?.last() ?: "No file selected",
+                    title = playbackService?.getCurrentTitle() ?: "No file selected",
                     isPlaying = isPlaying,
                     progress = progress,
                     onPlayPause = {
@@ -288,7 +288,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = selectedMidiFileUri?.lastPathSegment?.split("/")?.last() ?: "No file selected",
+                text = playbackService?.getCurrentTitle() ?: "No file selected",
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 

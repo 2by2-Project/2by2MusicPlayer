@@ -11,6 +11,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.provider.OpenableColumns
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -137,7 +138,7 @@ class PlaybackService : Service() {
             )
         }
 
-        val title = android.net.Uri.parse(uriString).lastPathSegment?.split("/")?.last() ?: "Unknown"
+        val title = resolveDisplayName(uri)
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
@@ -150,7 +151,7 @@ class PlaybackService : Service() {
 
         // Current playing
         currentUriString = uriString
-        currentTitle = uri.lastPathSegment?.split("/")?.last() ?: "Unknown"
+        currentTitle = title
 
         return true
     }
@@ -389,6 +390,21 @@ class PlaybackService : Service() {
 
     fun getCurrentUriString(): String? = currentUriString
     fun getCurrentTitle(): String? = currentTitle
+
+    private fun resolveDisplayName(uri: android.net.Uri): String {
+        // SAF / OpenDocument のURIなら基本ここで取れる
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && cursor.moveToFirst()) {
+                    val name = cursor.getString(idx)
+                    if (!name.isNullOrBlank()) return name
+                }
+            }
+
+        // fallback
+        return uri.lastPathSegment?.substringAfterLast('/') ?: "Unknown"
+    }
 
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "playback"
