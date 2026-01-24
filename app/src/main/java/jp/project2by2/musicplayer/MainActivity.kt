@@ -1,76 +1,95 @@
 package jp.project2by2.musicplayer
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.ContentUris
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.MediaStore
+import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ElevatedButton
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import android.content.Context
-import android.content.Intent
-import android.content.ComponentName
-import android.content.ServiceConnection
-import android.os.IBinder
-import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Slider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Card
+import androidx.compose.material3.ElevatedButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
-
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
 
 class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -106,24 +125,40 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     var isPlaying by remember { mutableStateOf(false) }
     val progress = if (loopEndMs > 0) currentPositionMs.toFloat() / loopEndMs.toFloat() else 0f
     var isDetailsExpanded by remember { mutableStateOf(false) }
+    var isSearchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedFolderKey by remember { mutableStateOf<String?>(null) }
+    var selectedFolderName by remember { mutableStateOf<String?>(null) }
 
     val midiFiles = remember { mutableStateListOf<MidiFileItem>() }
+    val folderItems = remember { mutableStateListOf<FolderItem>() }
 
-    val storagePermission = if (Build.VERSION.SDK_INT >= 33) {
+    val audioPermission = if (Build.VERSION.SDK_INT >= 33) {
         Manifest.permission.READ_MEDIA_AUDIO
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
-    var hasStoragePermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, storagePermission) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        )
+    val imagePermission = if (Build.VERSION.SDK_INT >= 33) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    val permissionsToRequest = if (Build.VERSION.SDK_INT >= 33) {
+        arrayOf(audioPermission, imagePermission)
+    } else {
+        arrayOf(audioPermission)
+    }
+    var hasAudioPermission by remember {
+        mutableStateOf(hasPermission(context, audioPermission))
+    }
+    var hasImagePermission by remember {
+        mutableStateOf(hasPermission(context, imagePermission))
     }
     val storagePermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasStoragePermission = granted
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasAudioPermission = results[audioPermission] == true
+        hasImagePermission = results[imagePermission] == true
     }
 
     val serviceConnection = remember {
@@ -175,15 +210,17 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    LaunchedEffect(hasStoragePermission) {
-        if (!hasStoragePermission) return@LaunchedEffect
+    LaunchedEffect(hasAudioPermission, hasImagePermission) {
+        if (!hasAudioPermission) return@LaunchedEffect
         midiFiles.clear()
         midiFiles.addAll(queryMidiFiles(context))
+        folderItems.clear()
+        folderItems.addAll(buildFolderItems(context, midiFiles, hasImagePermission))
     }
 
     LaunchedEffect(Unit) {
-        if (!hasStoragePermission) {
-            storagePermissionLauncher.launch(storagePermission)
+        if (!hasAudioPermission) {
+            storagePermissionLauncher.launch(permissionsToRequest)
         }
     }
 
@@ -224,7 +261,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         var sliderValue by remember { mutableStateOf(progress) }
 
         Surface(
-            modifier = Modifier.padding(horizontal = 0.dp, vertical = 0.dp),
+            modifier = modifier.padding(horizontal = 0.dp, vertical = 0.dp),
             shape = RoundedCornerShape(16.dp),
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,
@@ -294,7 +331,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 }
-                Spacer(modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -303,14 +340,48 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    if (selectedFolderKey != null) {
+                        IconButton(
+                            onClick = {
+                                selectedFolderKey = null
+                                selectedFolderName = null
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    }
+                },
                 title = {
-                    Text(
-                        text = "2by2 Music Player",
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
+                    if (selectedFolderKey != null) {
+                        Text(
+                            text = selectedFolderName ?: "Unknown",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        Image(
+                            painter = painterResource(id = R.drawable.logo_image),
+                            contentDescription = "App Logo",
+                            modifier = Modifier.height(48.dp)
+                        )
+                    }
                 },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            isSearchActive = !isSearchActive
+                            if (!isSearchActive) searchQuery = ""
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search"
+                        )
+                    }
                     IconButton(
                         onClick = {
                             context.startActivity(Intent(context, SettingsActivity::class.java))
@@ -360,8 +431,19 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                     .fillMaxSize()
                     .padding(horizontal = 0.dp, vertical = 12.dp)
             ) {
-                if (!hasStoragePermission) {
-                    ElevatedButton(onClick = { storagePermissionLauncher.launch(storagePermission) }) {
+                if (isSearchActive) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        placeholder = { Text("Search by file name") },
+                        singleLine = true
+                    )
+                }
+                if (!hasAudioPermission) {
+                    ElevatedButton(onClick = { storagePermissionLauncher.launch(permissionsToRequest) }) {
                         Text("Grant storage permission")
                     }
                 } else if (midiFiles.isEmpty()) {
@@ -369,44 +451,175 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                         text = "No .mid files found",
                         style = MaterialTheme.typography.bodySmall
                     )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 72.dp)
-                    ) {
-                        items(midiFiles, key = { it.uri }) { item ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { handleMidiTap(item.uri) }
-                                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = item.title,
-                                        maxLines = 1
-                                    )
-                                    if (item.folderName.isNotBlank()) {
-                                        Text(
-                                            text = item.folderName,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.alpha(0.5f),
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = formatDuration(item.durationMs),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(start = 12.dp)
-                                )
-                            }
-                        }
+                } else if (isSearchActive && searchQuery.isNotBlank()) {
+                    val filtered = midiFiles.filter {
+                        it.title.contains(searchQuery, ignoreCase = true)
                     }
+                    MidiFileList(
+                        items = filtered,
+                        selectedUri = selectedMidiFileUri,
+                        onItemClick = { handleMidiTap(it) }
+                    )
+                } else if (selectedFolderKey == null) {
+                    FolderGrid(
+                        items = folderItems,
+                        onFolderClick = { folder ->
+                            selectedFolderKey = folder.key
+                            selectedFolderName = folder.name
+                        }
+                    )
+                } else {
+                    val filtered = midiFiles.filter { it.folderKey == selectedFolderKey }
+                    MidiFileList(
+                        items = filtered,
+                        selectedUri = selectedMidiFileUri,
+                        onItemClick = { handleMidiTap(it) }
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MidiFileList(
+    items: List<MidiFileItem>,
+    selectedUri: Uri?,
+    onItemClick: (Uri) -> Unit
+) {
+    if (items.isEmpty()) {
+        Text(
+            text = "No matching files",
+            style = MaterialTheme.typography.bodySmall
+        )
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 72.dp)
+    ) {
+        items(items, key = { it.uri }) { item ->
+            MidiFileRow(
+                item = item,
+                isSelected = item.uri == selectedUri,
+                onClick = { onItemClick(item.uri) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MidiFileRow(
+    item: MidiFileItem,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val background = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(0.25f)
+    } else {
+        Color.Transparent
+    }
+    val contentColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onBackground
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 0.dp, vertical = 0.dp)
+            .background(background, RoundedCornerShape(4.dp)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f).padding(16.dp)
+        ) {
+            Text(
+                text = item.title,
+                maxLines = 1,
+                color = contentColor
+            )
+            if (item.folderName.isNotBlank()) {
+                Text(
+                    text = item.folderName,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.alpha(0.5f),
+                    maxLines = 1,
+                    color = contentColor
+                )
+            }
+        }
+        Text(
+            text = formatDuration(item.durationMs),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(16.dp),
+            color = contentColor
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderGrid(
+    items: List<FolderItem>,
+    onFolderClick: (FolderItem) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        items(items, key = { it.key }) { folder ->
+            FolderCard(folder = folder, onClick = { onFolderClick(folder) })
+        }
+    }
+}
+
+@Composable
+private fun FolderCard(
+    folder: FolderItem,
+    onClick: () -> Unit
+) {
+    val coverBitmap = rememberCoverBitmap(folder.coverUri)
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (coverBitmap != null) {
+                Image(
+                    bitmap = coverBitmap,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text(
+                text = folder.name,
+                modifier = Modifier.padding(12.dp),
+                maxLines = 1
+            )
         }
     }
 }
@@ -415,7 +628,14 @@ private data class MidiFileItem(
     val uri: Uri,
     val title: String,
     val folderName: String,
+    val folderKey: String,
     val durationMs: Long
+)
+
+private data class FolderItem(
+    val key: String,
+    val name: String,
+    val coverUri: Uri?
 )
 
 private fun queryMidiFiles(context: Context): List<MidiFileItem> {
@@ -460,29 +680,50 @@ private fun queryMidiFiles(context: Context): List<MidiFileItem> {
             val duration = cursor.getLong(durationColumn)
             val relativePath = if (relativePathColumn >= 0) cursor.getString(relativePathColumn) else null
             val dataPath = if (dataColumn >= 0) cursor.getString(dataColumn) else null
-            val folderName = extractFolderName(relativePath, dataPath)
+            val folderKey = extractFolderKey(relativePath, dataPath)
+            val folderName = extractFolderName(folderKey)
             val uri = ContentUris.withAppendedId(collection, id)
-            results.add(MidiFileItem(uri, name, folderName, duration))
+            results.add(MidiFileItem(uri, name, folderName, folderKey, duration))
         }
     }
     return results
 }
 
-private fun extractFolderName(relativePath: String?, dataPath: String?): String {
+private fun extractFolderKey(relativePath: String?, dataPath: String?): String {
     relativePath?.let {
         val trimmed = it.trimEnd('/', '\\')
         if (trimmed.isNotBlank()) {
-            return trimmed.substringAfterLast('/', trimmed.substringAfterLast('\\', trimmed))
+            return trimmed.replace('\\', '/')
         }
     }
     dataPath?.let {
         val normalized = it.replace('\\', '/')
         val parent = normalized.substringBeforeLast('/', "")
         if (parent.isNotBlank()) {
-            return parent.substringAfterLast('/')
+            return parent
         }
     }
     return ""
+}
+
+private fun extractFolderName(folderKey: String): String {
+    if (folderKey.isBlank()) return ""
+    return folderKey.substringAfterLast('/', folderKey.substringAfterLast('\\', folderKey))
+}
+
+private fun buildFolderItems(
+    context: Context,
+    items: List<MidiFileItem>,
+    hasImagePermission: Boolean
+): List<FolderItem> {
+    val grouped = items.groupBy { it.folderKey }
+    val results = mutableListOf<FolderItem>()
+    for ((key, _) in grouped) {
+        val name = extractFolderName(key).ifBlank { "Unknown" }
+        val coverUri = if (hasImagePermission) findCoverImageUri(context, key) else null
+        results.add(FolderItem(key = key, name = name, coverUri = coverUri))
+    }
+    return results.sortedBy { it.name.lowercase() }
 }
 
 private fun formatDuration(durationMs: Long): String {
@@ -491,4 +732,81 @@ private fun formatDuration(durationMs: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%d:%02d", minutes, seconds)
+}
+
+private fun hasPermission(context: Context, permission: String): Boolean {
+    return ContextCompat.checkSelfPermission(context, permission) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+}
+
+private fun findCoverImageUri(context: Context, folderKey: String): Uri? {
+    if (folderKey.isBlank()) return null
+    val collection = MediaStore.Files.getContentUri("external")
+    val projection = arrayOf(
+        MediaStore.Files.FileColumns._ID,
+        MediaStore.Files.FileColumns.DISPLAY_NAME,
+        MediaStore.Files.FileColumns.RELATIVE_PATH,
+        MediaStore.Files.FileColumns.DATA
+    )
+    val names = listOf(
+        "cover.jpg",
+        "cover.png",
+        "folder.jpg",
+        "folder.png",
+        "Cover.jpg",
+        "Cover.png"
+    )
+
+    val selection = if (Build.VERSION.SDK_INT >= 29) {
+        val nameClause = names.joinToString(" OR ") { "${MediaStore.Files.FileColumns.DISPLAY_NAME}=?" }
+        "${MediaStore.Files.FileColumns.RELATIVE_PATH}=? AND ($nameClause)"
+    } else {
+        val nameClause = names.joinToString(" OR ") { "${MediaStore.Files.FileColumns.DATA} LIKE ?" }
+        "($nameClause)"
+    }
+
+    val selectionArgs = if (Build.VERSION.SDK_INT >= 29) {
+        arrayOf(folderKey.trimEnd('/') + "/") + names.toTypedArray()
+    } else {
+        val base = folderKey.trimEnd('/')
+        names.map { "%$base/$it" }.toTypedArray()
+    }
+
+    context.contentResolver.query(
+        collection,
+        projection,
+        selection,
+        selectionArgs,
+        null
+    )?.use { cursor ->
+        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+        if (cursor.moveToFirst()) {
+            val id = cursor.getLong(idColumn)
+            return ContentUris.withAppendedId(collection, id)
+        }
+    }
+    return null
+}
+
+@Composable
+private fun rememberCoverBitmap(uri: Uri?): androidx.compose.ui.graphics.ImageBitmap? {
+    val context = LocalContext.current
+    val bitmapState = produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, uri) {
+        if (uri == null) {
+            value = null
+            return@produceState
+        }
+        value = withContext(Dispatchers.IO) {
+            val input: InputStream? = try {
+                context.contentResolver.openInputStream(uri)
+            } catch (e: Exception) {
+                null
+            }
+            input?.use {
+                val bmp = android.graphics.BitmapFactory.decodeStream(it)
+                bmp?.asImageBitmap()
+            }
+        }
+    }
+    return bitmapState.value
 }
