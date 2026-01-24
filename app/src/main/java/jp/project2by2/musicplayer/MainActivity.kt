@@ -16,6 +16,7 @@ import androidx.annotation.RequiresApi
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -221,6 +222,20 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) {
         if (!hasAudioPermission) {
             storagePermissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    // Back handler
+    BackHandler(enabled = selectedFolderKey != null || isSearchActive) {
+        when {
+            isSearchActive -> {
+                isSearchActive = false
+                searchQuery = ""
+            }
+            selectedFolderKey != null -> {
+                selectedFolderKey = null
+                selectedFolderName = null
+            }
         }
     }
 
@@ -659,7 +674,7 @@ private fun queryMidiFiles(context: Context): List<MidiFileItem> {
         "%.mid",
         "%.midi"
     )
-    val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+    val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} ASC"
 
     val results = mutableListOf<MidiFileItem>()
     context.contentResolver.query(
