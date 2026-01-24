@@ -19,12 +19,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -46,6 +52,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Slider
 import androidx.compose.material.icons.Icons
@@ -66,6 +73,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -78,12 +86,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 import kotlinx.coroutines.Dispatchers
@@ -276,11 +287,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         var sliderValue by remember { mutableStateOf(progress) }
 
         Surface(
-            modifier = modifier.padding(horizontal = 0.dp, vertical = 0.dp),
-            shape = RoundedCornerShape(16.dp),
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
-            onClick = onOpenPlayer
+            shape = RoundedCornerShape(0.dp),
+            tonalElevation = 4.dp,
+            onClick = onOpenPlayer,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Slider(
@@ -346,15 +356,21 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(28.dp))
             }
         }
     }
+
+    // Focus requester for search bar
+    val focusRequesterSearch = remember { FocusRequester() }
 
     // Main screen start
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
+                ),
                 navigationIcon = {
                     if (selectedFolderKey != null) {
                         IconButton(
@@ -392,10 +408,16 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                             if (!isSearchActive) searchQuery = ""
                         }
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search"
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = if (isSearchActive) { MaterialTheme.colorScheme.primaryContainer } else { Color.Transparent },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search",
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
                     }
                     IconButton(
                         onClick = {
@@ -404,14 +426,22 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
-                            contentDescription = "Settings"
+                            contentDescription = "Settings",
+                            modifier = Modifier.padding(8.dp)
                         )
                     }
-                }
+                },
+                modifier = Modifier.zIndex(1f),
             )
         },
         bottomBar = {
-            AnimatedVisibility(visible = selectedMidiFileUri != null) {
+            AnimatedVisibility(
+                visible = selectedMidiFileUri != null,
+                enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(400)) +
+                        fadeIn(animationSpec = tween(400)),
+                exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(400)) +
+                        fadeOut(animationSpec = tween(400))
+            ) {
                 MiniPlayerBar(
                     title = playbackService?.getCurrentTitle() ?: "No file selected",
                     isPlaying = isPlaying,
@@ -442,20 +472,31 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.Center
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 0.dp, vertical = 12.dp)
+                modifier = Modifier.fillMaxSize()
             ) {
-                if (isSearchActive) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        placeholder = { Text("Search by file name") },
-                        singleLine = true
-                    )
+                AnimatedVisibility(
+                    visible = isSearchActive,
+                    enter = slideInVertically(initialOffsetY = { -it }, animationSpec = tween(200)) +
+                        fadeIn(animationSpec = tween(200)),
+                    exit = slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(200)) +
+                        fadeOut(animationSpec = tween(200))
+                ) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .zIndex(0f)
+                                .focusRequester(focusRequesterSearch),
+                            placeholder = { Text("Search by file name") },
+                            singleLine = true
+                        )
+                        LaunchedEffect(Unit) {
+                            focusRequesterSearch.requestFocus()
+                        }
+                    }
                 }
                 if (!hasAudioPermission) {
                     ElevatedButton(onClick = { storagePermissionLauncher.launch(permissionsToRequest) }) {
@@ -466,30 +507,72 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                         text = "No .mid files found",
                         style = MaterialTheme.typography.bodySmall
                     )
-                } else if (isSearchActive && searchQuery.isNotBlank()) {
-                    val filtered = midiFiles.filter {
-                        it.title.contains(searchQuery, ignoreCase = true)
-                    }
-                    MidiFileList(
-                        items = filtered,
-                        selectedUri = selectedMidiFileUri,
-                        onItemClick = { handleMidiTap(it) }
-                    )
-                } else if (selectedFolderKey == null) {
-                    FolderGrid(
-                        items = folderItems,
-                        onFolderClick = { folder ->
-                            selectedFolderKey = folder.key
-                            selectedFolderName = folder.name
-                        }
-                    )
                 } else {
-                    val filtered = midiFiles.filter { it.folderKey == selectedFolderKey }
-                    MidiFileList(
-                        items = filtered,
-                        selectedUri = selectedMidiFileUri,
-                        onItemClick = { handleMidiTap(it) }
-                    )
+                    val baseItems = if (selectedFolderKey != null) {
+                        midiFiles.filter { it.folderKey == selectedFolderKey }
+                    } else {
+                        midiFiles
+                    }
+                    val isSearching = isSearchActive && searchQuery.isNotBlank()
+                    val filtered = if (isSearching) {
+                        baseItems.filter { it.title.contains(searchQuery, ignoreCase = true) }
+                    } else {
+                        baseItems
+                    }
+                    val screen = when {
+                        isSearching -> BrowseScreen.Search
+                        selectedFolderKey == null -> BrowseScreen.Folders
+                        else -> BrowseScreen.Files
+                    }
+                    AnimatedContent(
+                        targetState = screen,
+                        transitionSpec = {
+                            when {
+                                targetState == BrowseScreen.Files && initialState == BrowseScreen.Folders ->
+                                    slideInHorizontally(
+                                        initialOffsetX = { it },
+                                        animationSpec = tween(220)
+                                    ) + fadeIn(animationSpec = tween(120)) togetherWith
+                                        slideOutHorizontally(
+                                            targetOffsetX = { -it },
+                                            animationSpec = tween(220)
+                                        ) + fadeOut(animationSpec = tween(120))
+                                targetState == BrowseScreen.Folders && initialState == BrowseScreen.Files ->
+                                    slideInHorizontally(
+                                        initialOffsetX = { -it },
+                                        animationSpec = tween(220)
+                                    ) + fadeIn(animationSpec = tween(120)) togetherWith
+                                        slideOutHorizontally(
+                                            targetOffsetX = { it },
+                                            animationSpec = tween(220)
+                                        ) + fadeOut(animationSpec = tween(120))
+                                else ->
+                                    fadeIn(animationSpec = tween(120)) togetherWith
+                                        fadeOut(animationSpec = tween(120))
+                            }
+                        },
+                        label = "BrowseContent"
+                    ) { state ->
+                        when (state) {
+                            BrowseScreen.Folders -> FolderGrid(
+                                items = folderItems,
+                                onFolderClick = { folder ->
+                                    selectedFolderKey = folder.key
+                                    selectedFolderName = folder.name
+                                }
+                            )
+                            BrowseScreen.Files -> MidiFileList(
+                                items = filtered,
+                                selectedUri = selectedMidiFileUri,
+                                onItemClick = { handleMidiTap(it) }
+                            )
+                            BrowseScreen.Search -> MidiFileList(
+                                items = filtered,
+                                selectedUri = selectedMidiFileUri,
+                                onItemClick = { handleMidiTap(it) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -585,11 +668,37 @@ private fun FolderGrid(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
     ) {
-        items(items, key = { it.key }) { folder ->
-            FolderCard(folder = folder, onClick = { onFolderClick(folder) })
+        itemsIndexed(items, key = { _, item -> item.key }) { index, folder ->
+            FolderCardAnimated(
+                folder = folder,
+                index = index,
+                onClick = { onFolderClick(folder) }
+            )
         }
+    }
+}
+
+@Composable
+private fun FolderCardAnimated(
+    folder: FolderItem,
+    index: Int,
+    onClick: () -> Unit
+) {
+    var visible by remember(folder.key) { mutableStateOf(false) }
+    LaunchedEffect(folder.key) {
+        delay(0)
+        visible = true
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(
+            initialOffsetY = { it / 8 },
+            animationSpec = tween(0)
+        ) + fadeIn(animationSpec = tween(200))
+    ) {
+        FolderCard(folder = folder, onClick = onClick)
     }
 }
 
@@ -637,6 +746,12 @@ private fun FolderCard(
             )
         }
     }
+}
+
+private enum class BrowseScreen {
+    Folders,
+    Files,
+    Search
 }
 
 private data class MidiFileItem(
