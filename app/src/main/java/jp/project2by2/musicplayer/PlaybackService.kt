@@ -98,6 +98,7 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun loadMidi(uriString: String): Boolean {
         val uri = android.net.Uri.parse(uriString)
 
