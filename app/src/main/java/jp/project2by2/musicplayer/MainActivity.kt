@@ -208,28 +208,22 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             selectedMidiFileUri = Uri.parse(uriString)
             isPlaying = service.isPlaying()
         }
-
-        while (true) {
-            currentPositionMs = service.getCurrentPositionMs()
-            loopStartMs = service.getLoopPoint()?.startMs ?: 0L
-            loopEndMs = service.getDurationMs()
-
-            // Update current position text
-            val seconds = currentPositionMs / 1000
-            val minutes = seconds / 60
-            val remainingSeconds = seconds % 60
-            currentPositionString = String.format("%d:%02d", minutes, remainingSeconds)
-
-            delay(50L)
-        }
     }
 
     LaunchedEffect(hasAudioPermission, hasImagePermission) {
         if (!hasAudioPermission) return@LaunchedEffect
+
+        val (files, folders) = withContext(Dispatchers.IO) {
+            val f = queryMidiFiles(context)
+            val d = buildFolderItems(context, f, hasImagePermission)
+            f to d
+        }
+
         midiFiles.clear()
-        midiFiles.addAll(queryMidiFiles(context))
+        midiFiles.addAll(files)
+
         folderItems.clear()
-        folderItems.addAll(buildFolderItems(context, midiFiles, hasImagePermission))
+        folderItems.addAll(folders)
     }
 
     LaunchedEffect(Unit) {
@@ -270,103 +264,6 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             isPlaying = true
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-    }
-
-    // Bottom mini player
-    @Composable
-    fun MiniPlayerBar(
-        title: String,
-        isPlaying: Boolean,
-        progress: Float,
-        onPlayPause: () -> Unit,
-        onOpenPlayer: () -> Unit,
-        onSeekBar: (Float) -> Unit,
-        modifier: Modifier = Modifier
-    ) {
-        // For seekbar slider
-        var isSeeking by remember { mutableStateOf(false) }
-        var sliderValue by remember { mutableStateOf(progress) }
-
-        Surface(
-            shape = RoundedCornerShape(0.dp),
-            tonalElevation = 4.dp,
-            onClick = onOpenPlayer,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
-        ) {
-            Column(Modifier.fillMaxWidth()) {
-                Slider(
-                    value = if (isSeeking) sliderValue else progress,
-                    valueRange = 0f..1f,
-                    onValueChange = { v ->
-                        isSeeking = true
-                        sliderValue = v
-                    },
-                    onValueChangeFinished = {
-                        isSeeking = false
-                        val durationMs = loopEndMs
-                        if (durationMs > 0L) {
-                            val newPosMs = (sliderValue.coerceIn(0f, 1f) * durationMs).toLong()
-                            playbackService?.setCurrentPositionMs(newPosMs)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                        .height(32.dp)
-                        .padding(vertical = 24.dp)
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        title,
-                        Modifier.weight(1f)
-                            .padding(end = 16.dp)
-                            .clipToBounds()
-                            .basicMarquee(iterations = Int.MAX_VALUE),
-                        maxLines = 1
-                    )
-                    Text(
-                        text = currentPositionString,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                    IconButton(onClick = onPlayPause) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = null
-                        )
-                    }
-                }
-                AnimatedVisibility(
-                    visible = isDetailsExpanded,
-                    enter = expandVertically(animationSpec = tween(200)) + fadeIn(animationSpec = tween(200)),
-                    exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(200))
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "Current time: $currentPositionMs ms",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            text = "Loop point: $loopStartMs ms",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            text = "End of track: $loopEndMs ms",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(28.dp))
-            }
         }
     }
 
@@ -453,25 +350,12 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                 exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(400)) +
                         fadeOut(animationSpec = tween(400))
             ) {
-                MiniPlayerBar(
-                    title = playbackService?.getCurrentTitle() ?: "No file selected",
-                    isPlaying = isPlaying,
-                    progress = progress,
-                    onPlayPause = {
-                        if (!playbackService!!.isPlaying()) {
-                            playbackService?.play()
-                            isPlaying = true
-                        } else {
-                            playbackService?.pause()
-                            isPlaying = false
-                        }
-                    },
-                    onOpenPlayer = { isDetailsExpanded = !isDetailsExpanded },
-                    onSeekBar = { newValue ->
-                        val newPosMs = (newValue.coerceIn(0f, 1f) * loopEndMs).toLong()
-                        playbackService?.setCurrentPositionMs(newPosMs)
-                    },
-                    modifier = Modifier.fillMaxWidth()
+                MiniPlayerContainer(
+                    playbackService = playbackService,
+                    selectedMidiFileUri = selectedMidiFileUri,
+                    onPlay = { playbackService?.play() },
+                    onPause = { playbackService?.pause() },
+                    onSeekToMs = { ms -> playbackService?.setCurrentPositionMs(ms) },
                 )
             }
         },
