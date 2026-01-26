@@ -323,6 +323,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                     Text(
                         title,
                         Modifier.weight(1f)
+                            .padding(end = 16.dp)
                             .clipToBounds()
                             .basicMarquee(iterations = Int.MAX_VALUE),
                         maxLines = 1
