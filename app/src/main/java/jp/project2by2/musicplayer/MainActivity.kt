@@ -22,10 +22,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -34,14 +32,12 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,15 +48,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.Slider
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
@@ -87,7 +79,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -98,6 +89,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.MoreExecutors
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -126,19 +120,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 
     var selectedMidiFileUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Positions
-    var currentPositionString by remember { mutableStateOf("0:00") }
-    var currentPositionMs by remember { mutableStateOf(0L) }
-    var loopStartMs: Long by remember { mutableStateOf(0L) }
-    var loopEndMs: Long by remember { mutableStateOf(0L) }
-
     var playbackService by remember { mutableStateOf<PlaybackService?>(null) }
     var isBound by remember { mutableStateOf(false) }
 
     // Playing state (for bottom bar)
-    var isPlaying by remember { mutableStateOf(false) }
-    val progress = if (loopEndMs > 0) currentPositionMs.toFloat() / loopEndMs.toFloat() else 0f
-    var isDetailsExpanded by remember { mutableStateOf(false) }
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedFolderKey by remember { mutableStateOf<String?>(null) }
@@ -146,6 +131,13 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 
     val midiFiles = remember { mutableStateListOf<MidiFileItem>() }
     val folderItems = remember { mutableStateListOf<FolderItem>() }
+
+    // Media3
+    val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
+    val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+    controllerFuture.addListener({
+        // MediaController is available here with controllerFuture.get()
+    }, MoreExecutors.directExecutor())
 
     val audioPermission = if (Build.VERSION.SDK_INT >= 33) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -158,7 +150,10 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
     val permissionsToRequest = if (Build.VERSION.SDK_INT >= 33) {
-        arrayOf(audioPermission, imagePermission)
+        arrayOf(
+            audioPermission,
+            imagePermission,
+        )
     } else {
         arrayOf(audioPermission)
     }
@@ -206,7 +201,6 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
 
         service.getCurrentUriString()?.let { uriString ->
             selectedMidiFileUri = Uri.parse(uriString)
-            isPlaying = service.isPlaying()
         }
     }
 
@@ -227,7 +221,12 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(Unit) {
-        if (!hasAudioPermission) {
+        val needsAnyPermission = if (Build.VERSION.SDK_INT >= 33) {
+            !hasAudioPermission || !hasImagePermission
+        } else {
+            !hasAudioPermission
+        }
+        if (needsAnyPermission) {
             storagePermissionLauncher.launch(permissionsToRequest)
         }
     }
@@ -253,15 +252,13 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
             return
         }
         selectedMidiFileUri = uri
-        isPlaying = false
         try {
             val ok = playbackService?.loadMidi(uri.toString()) ?: false
             if (!ok) {
                 Toast.makeText(context, "Failed to load MIDI or SoundFont", Toast.LENGTH_SHORT).show()
                 return
             }
-            playbackService?.play()
-            isPlaying = true
+            controllerFuture.get().play()
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -296,9 +293,7 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                     if (selectedFolderKey != null) {
                         Text(
                             text = selectedFolderName ?: "Unknown",
-                            modifier = Modifier.fillMaxWidth()
-                                .clipToBounds()
-                                .basicMarquee(iterations = Int.MAX_VALUE),
+                            modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center
                         )
                     } else {
@@ -353,9 +348,9 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
                 MiniPlayerContainer(
                     playbackService = playbackService,
                     selectedMidiFileUri = selectedMidiFileUri,
-                    onPlay = { playbackService?.play() },
-                    onPause = { playbackService?.pause() },
-                    onSeekToMs = { ms -> playbackService?.setCurrentPositionMs(ms) },
+                    onPlay = { controllerFuture.get().play() },
+                    onPause = { controllerFuture.get().pause() },
+                    onSeekToMs = { ms -> controllerFuture.get().seekTo(ms) },
                 )
             }
         },
@@ -531,10 +526,7 @@ private fun MidiFileRow(
             Text(
                 text = item.title,
                 maxLines = 1,
-                color = contentColor,
-                modifier = Modifier
-                    .clipToBounds()
-                    .basicMarquee(iterations = Int.MAX_VALUE)
+                color = contentColor
             )
             if (item.folderName.isNotBlank()) {
                 Text(
@@ -639,9 +631,7 @@ private fun FolderCard(
             }
             Text(
                 text = folder.name,
-                modifier = Modifier.padding(12.dp)
-                    .clipToBounds()
-                    .basicMarquee(iterations = Int.MAX_VALUE),
+                modifier = Modifier.padding(12.dp),
                 maxLines = 1
             )
         }

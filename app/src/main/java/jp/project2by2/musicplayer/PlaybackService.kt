@@ -1,30 +1,23 @@
 package jp.project2by2.musicplayer
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.os.SystemClock
 import android.provider.OpenableColumns
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
-import androidx.core.app.NotificationCompat
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Looper
 import androidx.annotation.RequiresApi
-import androidx.media.app.NotificationCompat.MediaStyle
-import androidx.media.session.MediaButtonReceiver
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
 import com.un4seen.bass.BASS
 import com.un4seen.bass.BASSMIDI
 import dev.atsushieno.ktmidi.Midi1Music
@@ -32,23 +25,19 @@ import dev.atsushieno.ktmidi.MidiChannelStatus
 import dev.atsushieno.ktmidi.read
 import java.io.File
 
-class PlaybackService : Service() {
+@UnstableApi
+class PlaybackService : MediaSessionService() {
     private val binder = LocalBinder()
-
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-
-    private val notificationManager by lazy {
-        getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-    }
 
     private var handles: MidiHandles? = null
     private var loopPoint: LoopPoint? = null
     private var syncProc: BASS.SYNCPROC? = null
     private var syncHandle: Int = 0
-    private var isForeground = false
 
     // Media session
-    private lateinit var mediaSession: MediaSessionCompat
+    private lateinit var bassPlayer: BassPlayer
+    private lateinit var mediaSession: MediaSession
+    private lateinit var notificationProvider: DefaultMediaNotificationProvider
 
     // Current playing
     private var currentUriString: String? = null
@@ -60,33 +49,51 @@ class PlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
         bassInit()
 
-        mediaSession = MediaSessionCompat(this, "2by2Playback").apply {
-            setFlags(
-                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
-                        MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-            )
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() { play() }
-                override fun onPause() { pause() }
-                override fun onStop() { stop() }
-                override fun onSeekTo(pos: Long) { setCurrentPositionMs(pos) }
-            })
-            isActive = true
-        }
+        bassPlayer = BassPlayer(
+            looper = Looper.getMainLooper(),
+            onPlay = { playInternalFromController() },
+            onPause = { pauseInternalFromController(releaseFocus = true) },
+            onSeek = { ms -> seekInternalFromController(ms) },
+            queryPositionMs = { getCurrentPositionMs() },
+            queryDurationMs = { getDurationMs() },
+            queryIsPlaying = { isPlaying() },
+        )
+        mediaSession = MediaSession.Builder(this, bassPlayer).build()
+
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        mediaSession = MediaSession.Builder(this, bassPlayer)
+            .setId("2by2Playback")
+            .setSessionActivity(contentIntent)
+            .build()
+
+        notificationProvider = DefaultMediaNotificationProvider.Builder(this)
+            .setChannelName(R.string.app_name)
+            .setChannelId(NOTIFICATION_CHANNEL_ID)
+            .setNotificationId(NOTIFICATION_ID)
+            .build().also { provider ->
+                provider.setSmallIcon(R.drawable.notification_icon)
+            }
+        setMediaNotificationProvider(notificationProvider)
     }
 
-    override fun onBind(intent: Intent): IBinder = binder
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_PLAY -> play()
-            ACTION_PAUSE -> pause()
-            ACTION_STOP -> stop()
+    override fun onBind(intent: Intent?): IBinder? {
+        return if (intent?.action == MediaSessionService.SERVICE_INTERFACE) {
+            super.onBind(intent)
+        } else {
+            binder
         }
-        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -95,7 +102,20 @@ class PlaybackService : Service() {
         mediaSession.release()
         releaseHandles()
         bassTerminate()
+        bassPlayer.release()
         super.onDestroy()
+    }
+
+    private fun isPlayingBass(): Boolean {
+        val h = handles ?: return false
+        return BASS.BASS_ChannelIsActive(h.stream) == BASS.BASS_ACTIVE_PLAYING
+    }
+
+    private fun setBassPositionMs(ms: Long) {
+        val h = handles ?: return
+        val secs = ms.coerceAtLeast(0L).toDouble() / 1000.0
+        val bytes = BASS.BASS_ChannelSeconds2Bytes(h.stream, secs)
+        BASS.BASS_ChannelSetPosition(h.stream, bytes, BASS.BASS_POS_BYTE)
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -118,29 +138,34 @@ class PlaybackService : Service() {
 
         releaseHandles()
         handles = bassLoadMidiWithSoundFont(cacheMidiFile.absolutePath, cacheSoundFontFile.absolutePath)
+        val h = handles ?: return false
+        if (h.stream == 0 || h.font == 0) {
+            releaseHandles()
+            return false
+        }
 
         loopPoint = findLoopPoint(uri)
-        val bytes = BASS.BASS_ChannelGetLength(handles!!.stream, BASS.BASS_POS_BYTE)
+        val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
 
-        BASS.BASS_ChannelFlags(handles!!.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
-        BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
-        BASS.BASS_ChannelFlags(handles!!.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+        BASS.BASS_ChannelFlags(h.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
+        BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
+        BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
 
         syncProc = null
         if (syncHandle != 0) {
-            BASS.BASS_ChannelRemoveSync(handles!!.stream, syncHandle)
+            BASS.BASS_ChannelRemoveSync(h.stream, syncHandle)
             syncHandle = 0
         }
         loopPoint?.let { lp ->
             syncProc = BASS.SYNCPROC { _, _, _, _ ->
                 BASS.BASS_ChannelSetPosition(
-                    handles!!.stream,
+                    h.stream,
                     lp.startTick.toLong(),
                     BASSMIDI.BASS_POS_MIDI_TICK or BASSMIDI.BASS_MIDI_DECAYSEEK
                 )
             }
             syncHandle = BASS.BASS_ChannelSetSync(
-                handles!!.stream,
+                h.stream,
                 BASS.BASS_SYNC_MIXTIME,
                 bytes,
                 syncProc,
@@ -149,19 +174,14 @@ class PlaybackService : Service() {
         }
 
         val title = resolveDisplayName(uri)
-        mediaSession.setMetadata(
-            MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDurationMs())
-                .build()
-        )
-
-        updateSessionState()
-        updateNotification(false)
 
         // Current playing
         currentUriString = uriString
         currentTitle = title
+
+        // Media3
+        bassPlayer.setMetadata(title)
+        bassPlayer.invalidateFromBass()
 
         return true
     }
@@ -172,47 +192,30 @@ class PlaybackService : Service() {
         }
         registerNoisyReceiver()
 
-        handles?.let {
-            BASS.BASS_ChannelPlay(it.stream, false)
-            updateSessionState()
-            startForegroundIfNeeded()
-            updateNotification(forceShow = true)
-        }
-        handler.removeCallbacks(stateTicker)
-        handler.post(stateTicker)
+        handles?.let { BASS.BASS_ChannelPlay(it.stream, false) }
+        bassPlayer.invalidateFromBass()
     }
 
     fun pauseInternal(releaseFocus: Boolean) {
-        handles?.let {
-            BASS.BASS_ChannelPause(it.stream)
-            updateSessionState()
-        }
-        updateNotification(forceShow = true)
-        handler.removeCallbacks(stateTicker)
-
         unregisterNoisyReceiver()
-
         if (releaseFocus) {
             abandonAudioFocus()
         }
+
+        handles?.let { BASS.BASS_ChannelPause(it.stream) }
+        bassPlayer.invalidateFromBass()
     }
     fun pause() = pauseInternal(releaseFocus = true)
 
     fun stop() {
-        handles?.let {
-            BASS.BASS_ChannelStop(it.stream)
-            BASS.BASS_ChannelSetPosition(it.stream, 0, BASS.BASS_POS_BYTE)
-        }
-        updateSessionState()
-        if (isForeground) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            isForeground = false
-        }
-        updateNotification(forceShow = false)
-        handler.removeCallbacks(stateTicker)
-
         unregisterNoisyReceiver()
         abandonAudioFocus()
+
+        handles?.let {
+            BASS.BASS_ChannelPause(it.stream)
+            BASS.BASS_ChannelSetPosition(it.stream, 0, BASS.BASS_POS_BYTE)
+        }
+        bassPlayer.invalidateFromBass()
     }
 
     fun getCurrentPositionMs(): Long {
@@ -227,8 +230,7 @@ class PlaybackService : Service() {
         val secs = ms.coerceAtLeast(0L).toDouble() / 1000.0
         val bytes = BASS.BASS_ChannelSeconds2Bytes(h.stream, secs)
         BASS.BASS_ChannelSetPosition(h.stream, bytes, BASS.BASS_POS_BYTE)
-        updateNotification(true)
-        updateSessionState()
+        bassPlayer.invalidateFromBass()
     }
 
     fun getDurationMs(): Long {
@@ -243,106 +245,6 @@ class PlaybackService : Service() {
     fun isPlaying(): Boolean {
         val h = handles ?: return false
         return BASS.BASS_ChannelIsActive(h.stream) == BASS.BASS_ACTIVE_PLAYING
-    }
-
-    private fun updateNotification(forceShow: Boolean) {
-        val n = buildNotification()
-        if (isForeground || forceShow) {
-            notificationManager.notify(NOTIFICATION_ID, n)
-        }
-    }
-
-    private fun startForegroundIfNeeded() {
-        if (!isForeground) {
-            val n = buildNotification()
-            if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-            } else {
-                startForeground(NOTIFICATION_ID, n)
-            }
-            isForeground = true
-        }
-    }
-
-    private fun buildNotification(): Notification {
-        val isPlaying = isPlaying()
-
-        val playPauseAction = if (isPlaying) PlaybackStateCompat.ACTION_PAUSE else PlaybackStateCompat.ACTION_PLAY
-        val playPauseIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(this, playPauseAction)
-        val stopIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_STOP)
-        val contentIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("2by2 Music Player")
-            .setContentText(if (isPlaying) "Playing" else "Paused")
-            .setOnlyAlertOnce(true)
-            .setShowWhen(false)
-            .setOngoing(isPlaying)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setStyle(
-                MediaStyle()
-                    .setMediaSession(mediaSession.sessionToken)
-                    .setShowActionsInCompactView(0, 1)
-            )
-            .setContentIntent(contentIntent)
-            .addAction(
-                NotificationCompat.Action(
-                    R.drawable.ic_launcher_foreground,
-                    if (isPlaying) "Pause" else "Play",
-                    playPauseIntent
-                )
-            )
-            .addAction(
-                NotificationCompat.Action(
-                    R.drawable.ic_launcher_foreground,
-                    "Stop",
-                    stopIntent
-                )
-            )
-            .build()
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Playback",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            notificationManager.createNotificationChannel(channel)
-        }
-    }
-
-    fun updateSessionState() {
-        val playing = isPlaying()
-        val state = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-        val actions =
-            PlaybackStateCompat.ACTION_PLAY or
-                    PlaybackStateCompat.ACTION_PAUSE or
-                    PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                    PlaybackStateCompat.ACTION_STOP or
-                    PlaybackStateCompat.ACTION_SEEK_TO
-
-        mediaSession.setPlaybackState(
-            PlaybackStateCompat.Builder()
-                .setActions(actions)
-                .setState(
-                    state,
-                    getCurrentPositionMs(),
-                    if (playing) 1f else 0f,
-                    SystemClock.elapsedRealtime()
-                )
-                .build()
-        )
     }
 
     private fun releaseHandles() {
@@ -405,20 +307,10 @@ class PlaybackService : Service() {
         return MidiHandles(stream, soundFontHandle)
     }
 
-    private val stateTicker = object : Runnable {
-        override fun run() {
-            if (isPlaying()) {
-                updateSessionState()
-                handler.postDelayed(this, 200)
-            }
-        }
-    }
-
     fun getCurrentUriString(): String? = currentUriString
     fun getCurrentTitle(): String? = currentTitle
 
     private fun resolveDisplayName(uri: android.net.Uri): String {
-        // SAF / OpenDocument のURIなら基本ここで取れる
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
                 val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -428,7 +320,6 @@ class PlaybackService : Service() {
                 }
             }
 
-        // fallback
         return uri.lastPathSegment?.substringAfterLast('/') ?: "Unknown"
     }
 
@@ -457,7 +348,6 @@ class PlaybackService : Service() {
             .build()
 
         val result = if (Build.VERSION.SDK_INT >= 26) {
-            // ★毎回作らず、必要なら1回作って使い回してもOK（ここは簡易版）
             val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attrs)
                 .setOnAudioFocusChangeListener(focusChangeListener)
@@ -526,9 +416,28 @@ class PlaybackService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val MIDI_FILE = "midi.mid"
         private const val SOUND_FONT_FILE = "soundfont.sf2"
-        private const val ACTION_PLAY = "jp.project2by2.musicplayer.action.PLAY"
-        private const val ACTION_PAUSE = "jp.project2by2.musicplayer.action.PAUSE"
-        private const val ACTION_STOP = "jp.project2by2.musicplayer.action.STOP"
+    }
+
+    private fun playInternalFromController() {
+        if (!requestAudioFocus()) {
+            bassPlayer.invalidateFromBass()
+            return
+        }
+        registerNoisyReceiver()
+        handles?.let { BASS.BASS_ChannelPlay(it.stream, false) }
+        bassPlayer.invalidateFromBass()
+    }
+
+    private fun pauseInternalFromController(releaseFocus: Boolean) {
+        handles?.let { BASS.BASS_ChannelPause(it.stream) }
+        unregisterNoisyReceiver()
+        if (releaseFocus) abandonAudioFocus()
+        bassPlayer.invalidateFromBass()
+    }
+
+    private fun seekInternalFromController(ms: Long) {
+        setCurrentPositionMs(ms)
+        bassPlayer.invalidateFromBass()
     }
 }
 
