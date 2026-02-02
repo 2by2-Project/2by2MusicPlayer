@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Ignore BASS/BASSMIDI proprietary stuff
+/app/src/main/jniLibs/
+/app/src/main/java/com/un4seen/bass/
