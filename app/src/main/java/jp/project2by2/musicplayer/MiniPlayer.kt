@@ -181,7 +181,7 @@ fun MiniPlayerContainer(
             // value 代入（= Compose state更新）は Main に戻った状態で行われる
             value = snapshot
 
-            delay(if (snapshot.isPlaying) 100L else 1200L)
+            delay(if (snapshot.isPlaying) 100L else 200L)
         }
     }.value
 

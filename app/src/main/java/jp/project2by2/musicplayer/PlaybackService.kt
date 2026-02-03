@@ -154,6 +154,14 @@ class PlaybackService : MediaSessionService() {
             return false
         }
 
+        // Current playing
+        currentUriString = uriString
+        currentTitle = resolveDisplayName(uri)
+
+        // Media3
+        bassPlayer.setMetadata(currentTitle!!, currentArtist, currentArtworkUri)
+        bassPlayer.invalidateFromBass()
+
         loopPoint = findLoopPoint(cacheMidiFile)
         val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
 
@@ -168,9 +176,6 @@ class PlaybackService : MediaSessionService() {
         }
         loopPoint?.let { lp ->
             syncProc = BASS.SYNCPROC { _, _, _, _ ->
-                val startSecs = lp.startMs.toDouble() / 1000.0
-                val startBytes = BASS.BASS_ChannelSeconds2Bytes(h.stream, startSecs)
-
                 BASS.BASS_ChannelSetPosition(
                     h.stream,
                     lp.startTick.toLong(),
@@ -187,14 +192,6 @@ class PlaybackService : MediaSessionService() {
                 0
             )
         }
-
-        // Current playing
-        currentUriString = uriString
-        currentTitle = resolveDisplayName(uri)
-
-        // Media3
-        bassPlayer.setMetadata(currentTitle!!, currentArtist, currentArtworkUri)
-        bassPlayer.invalidateFromBass()
 
         return true
     }
