@@ -154,7 +154,7 @@ class PlaybackService : MediaSessionService() {
             return false
         }
 
-        loopPoint = findLoopPoint(uri)
+        loopPoint = findLoopPoint(cacheMidiFile)
         val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
 
         BASS.BASS_ChannelFlags(h.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
@@ -275,31 +275,35 @@ class PlaybackService : MediaSessionService() {
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun findLoopPoint(uri: android.net.Uri): LoopPoint {
+    private fun findLoopPoint(midiFile: File): LoopPoint {
         val loopPoint = LoopPoint()
-        contentResolver.openInputStream(uri)?.use { inputStream ->
-            val bytes = inputStream.readAllBytes().toList()
-            val music = Midi1Music().apply { read(bytes) }
+        try {
+            midiFile.inputStream().use { inputStream ->
+                val bytes = inputStream.readAllBytes().toList()
+                val music = Midi1Music().apply { read(bytes) }
 
-            for (track in music.tracks) {
-                var tick = 0
-                for (e in track.events) {
-                    tick += e.deltaTime
-                    val m = e.message
-                    val isCC = ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC)
-                    if (isCC && m.msb.toInt() == 111) {
-                        loopPoint.startTick = tick
-                        loopPoint.startMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
+                for (track in music.tracks) {
+                    var tick = 0
+                    for (e in track.events) {
+                        tick += e.deltaTime
+                        val m = e.message
+                        val isCC = ((m.statusByte.toInt() and 0xF0) == MidiChannelStatus.CC)
+                        if (isCC && m.msb.toInt() == 111) {
+                            loopPoint.startTick = tick
+                            loopPoint.startMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
+                        }
                     }
                 }
-            }
 
-            for (track in music.tracks) {
-                var tick = 0
-                for (e in track.events) tick += e.deltaTime
-                loopPoint.endTick = tick
-                loopPoint.endMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
+                for (track in music.tracks) {
+                    var tick = 0
+                    for (e in track.events) tick += e.deltaTime
+                    loopPoint.endTick = tick
+                    loopPoint.endMs = music.getTimePositionInMillisecondsForTick(tick).toLong()
+                }
             }
+        } catch (_: Exception) {
+            // Parse errors should not crash playback. Use default loop values.
         }
         return loopPoint
     }

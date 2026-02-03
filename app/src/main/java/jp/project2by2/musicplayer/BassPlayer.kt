@@ -1,6 +1,7 @@
 package jp.project2by2.musicplayer
 
 import android.net.Uri
+import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -21,6 +22,8 @@ class BassPlayer(
     private val queryDurationMs: () -> Long,
     private val queryIsPlaying: () -> Boolean,
 ) : SimpleBasePlayer(looper) {
+    private val playerHandler = Handler(looper)
+    private val applicationLooper = looper
 
     private var title: String = "2by2 Music Player"
     private var artist: String? = null
@@ -29,14 +32,28 @@ class BassPlayer(
     private val mediaId = "midi"
 
     fun setMetadata(title: String, artist: String?, artworkUri: Uri?) {
-        this.title = title
-        this.artist = artist
-        this.artworkUri = artworkUri
-        invalidateState()
+        val update = {
+            this.title = title
+            this.artist = artist
+            this.artworkUri = artworkUri
+            invalidateState()
+        }
+        if (Looper.myLooper() == applicationLooper) {
+            update()
+        } else {
+            playerHandler.post(update)
+        }
     }
 
     fun invalidateFromBass() {
-        invalidateState()
+        val update = {
+            invalidateState()
+        }
+        if (Looper.myLooper() == applicationLooper) {
+            update()
+        } else {
+            playerHandler.post(update)
+        }
     }
 
     override fun getState(): State {

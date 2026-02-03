@@ -76,6 +76,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,34 +92,67 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
 
 class MainActivity : ComponentActivity() {
+    private var externalOpenUri by mutableStateOf<Uri?>(null)
+
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleViewIntent(intent)
         enableEdgeToEdge()
         setContent {
             _2by2MusicPlayerTheme {
-                MusicPlayerMainScreen()
+                MusicPlayerMainScreen(
+                    externalOpenUri = externalOpenUri,
+                    onExternalOpenConsumed = { externalOpenUri = null }
+                )
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleViewIntent(intent)
+    }
+
+    private fun handleViewIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+
+        val type = (intent.type ?: contentResolver.getType(uri) ?: "").lowercase()
+        val path = uri.toString().lowercase()
+        val isMidi = type in setOf("audio/midi", "audio/x-midi", "application/midi", "application/x-midi")
+                || path.endsWith(".mid") || path.endsWith(".midi")
+        if (!isMidi) return
+
+        externalOpenUri = uri
+    }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
+fun MusicPlayerMainScreen(
+    externalOpenUri: Uri? = null,
+    onExternalOpenConsumed: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var selectedMidiFileUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -257,19 +291,39 @@ fun MusicPlayerMainScreen(modifier: Modifier = Modifier) {
         selectedMidiFileUri = uri
 
         // Set artist and cover uri
-        playbackService?.currentArtist = selectedFolderName
-        playbackService?.currentArtworkUri = selectedFolderCoverUri
+        val service = playbackService
+        if (service == null) {
+            Toast.makeText(context, "Playback service is not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+        service.currentArtist = selectedFolderName
+        service.currentArtworkUri = selectedFolderCoverUri
 
-        try {
-            val ok = playbackService?.loadMidi(uri.toString()) ?: false
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                service.loadMidi(uri.toString())
+            }
             if (!ok) {
                 Toast.makeText(context, "Failed to load MIDI or SoundFont", Toast.LENGTH_SHORT).show()
-                return
+                return@launch
             }
-            controllerFuture.get().play()
-        } catch (e: Exception) {
-            e.printStackTrace()
+            controllerFuture.addListener(
+                {
+                    runCatching { controllerFuture.get().play() }
+                        .onFailure {
+                            Toast.makeText(context, "Failed to start playback", Toast.LENGTH_SHORT).show()
+                        }
+                },
+                MoreExecutors.directExecutor()
+            )
         }
+    }
+
+    LaunchedEffect(externalOpenUri, playbackService) {
+        val uri = externalOpenUri ?: return@LaunchedEffect
+        if (playbackService == null) return@LaunchedEffect
+        handleMidiTap(uri)          // 既存の再生処理へ
+        onExternalOpenConsumed()    // 二重再生防止
     }
 
     // Focus requester for search bar
