@@ -1,5 +1,6 @@
 package jp.project2by2.musicplayer
 
+import android.R.attr.defaultValue
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -254,6 +255,46 @@ class PlaybackService : MediaSessionService() {
         val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
         val secs = BASS.BASS_ChannelBytes2Seconds(h.stream, bytes)
         return (secs * 1000.0).toLong()
+    }
+
+    fun setEffectDisabled(value: Boolean) {
+        val h = handles ?: return
+        val flagsToSet = if (value) BASSMIDI.BASS_MIDI_NOFX else 0
+        BASS.BASS_ChannelFlags(
+            h.stream,
+            flagsToSet,
+            BASSMIDI.BASS_MIDI_NOFX
+        )
+    }
+
+    fun getEffectDisabled(): Boolean {
+        val h = handles ?: return false
+        val flags = BASS.BASS_ChannelFlags(h.stream, 0, 0)
+        if (flags == -1L) {
+            return false
+        }
+        return (flags.toInt() and BASSMIDI.BASS_MIDI_NOFX) != 0
+    }
+
+    fun getReverbStrength(): Float {
+        val h = handles ?: return defaultValue.toFloat()
+        val out = BASS.FloatValue()   // ← BASS.java にある想定
+        val ok = BASS.BASS_ChannelGetAttribute(
+            h.stream,
+            BASSMIDI.BASS_ATTRIB_MIDI_REVERB,
+            out
+        )
+        return if (ok) out.value else defaultValue.toFloat()
+    }
+
+    fun setReverbStrength(value: Float) {
+        handles?.let {
+            BASS.BASS_ChannelSetAttribute(
+                it.stream,
+                BASSMIDI.BASS_ATTRIB_MIDI_REVERB,
+                value
+            )
+        }
     }
 
     fun getLoopPoint(): LoopPoint? = loopPoint

@@ -65,4 +65,5 @@ dependencies {
     implementation("androidx.compose.material:material")
     implementation("androidx.media:media:1.7.0")
     implementation("androidx.media3:media3-session:1.9.0")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
 }
