@@ -99,6 +99,7 @@ import com.google.common.util.concurrent.MoreExecutors
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -416,6 +417,23 @@ fun MusicPlayerMainScreen(
                     onPlay = { controllerFuture.get().play() },
                     onPause = { controllerFuture.get().pause() },
                     onSeekToMs = { ms -> controllerFuture.get().seekTo(ms) },
+                    onPrevious = {
+                        scope.launch {
+                            val shuffleEnabled = SettingsDataStore.shuffleEnabledFlow(context).first()
+                            val currentPositionMs = playbackService?.getCurrentPositionMs() ?: 0L
+                            if (currentPositionMs > 3000L) {
+                                controllerFuture.get().seekTo(0)
+                            } else {
+                                playbackService?.playPreviousTrackInCurrentFolder(shuffleEnabled)
+                            }
+                        }
+                    },
+                    onNext = {
+                        scope.launch {
+                            val shuffleEnabled = SettingsDataStore.shuffleEnabledFlow(context).first()
+                            playbackService?.playNextTrackInCurrentFolder(shuffleEnabled)
+                        }
+                    }
                 )
             }
         },

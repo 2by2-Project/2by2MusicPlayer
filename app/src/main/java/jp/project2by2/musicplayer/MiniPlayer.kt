@@ -1,5 +1,6 @@
 package jp.project2by2.musicplayer
 
+import android.content.Context
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
@@ -15,31 +16,44 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Slider
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.materialIcon
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class MiniPlayerUi(
@@ -62,12 +76,26 @@ fun MiniPlayerBar(
     loopEndMs: Long,
     onPlayPause: () -> Unit,
     onSeekTo: (Float) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     // For seekbar slider
     var isSeeking by remember { mutableStateOf(false) }
     var sliderValue by remember { mutableStateOf(progress) }
     var isDetailsExpanded by remember { mutableStateOf(false) }
+
+    var loopEnabled by remember { mutableStateOf(false) }
+    var shuffleEnabled by remember { mutableStateOf(false) }
+
+    // Load settings value
+    LaunchedEffect(isPlaying) {
+        loopEnabled = SettingsDataStore.loopEnabledFlow(context).first()
+        shuffleEnabled = SettingsDataStore.shuffleEnabledFlow(context).first()
+    }
 
     Surface(
         shape = RoundedCornerShape(0.dp),
@@ -87,7 +115,8 @@ fun MiniPlayerBar(
                     isSeeking = false
                     onSeekTo(sliderValue)
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
                     .height(32.dp)
                     .padding(vertical = 24.dp)
             )
@@ -99,7 +128,8 @@ fun MiniPlayerBar(
             ) {
                 Text(
                     title,
-                    Modifier.weight(1f)
+                    Modifier
+                        .weight(1f)
                         .padding(end = 16.dp)
                         .clipToBounds()
                         .basicMarquee(iterations = Int.MAX_VALUE),
@@ -113,11 +143,69 @@ fun MiniPlayerBar(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(end = 8.dp)
                 )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+            ) {
+                IconButton(
+                    onClick = {
+                        shuffleEnabled = !shuffleEnabled
+                        scope.launch {
+                            SettingsDataStore.setShuffleEnabled(context, shuffleEnabled)
+                        }
+                    }
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (shuffleEnabled) { MaterialTheme.colorScheme.primaryContainer } else { Color.Transparent },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shuffle,
+                            contentDescription = null,
+                            modifier = Modifier.padding(8.dp).size(48.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onPrevious) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = null,
+                        modifier = Modifier.padding(8.dp).size(48.dp)
+                    )
+                }
                 IconButton(onClick = onPlayPause) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = null
+                        contentDescription = null,
+                        modifier = Modifier.padding(8.dp).size(48.dp)
                     )
+                }
+                IconButton(onClick = onNext) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = null,
+                        modifier = Modifier.padding(8.dp).size(48.dp)
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        loopEnabled = !loopEnabled
+                        scope.launch {
+                            SettingsDataStore.setLoopEnabled(context, loopEnabled)
+                        }
+                    }
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (loopEnabled) { MaterialTheme.colorScheme.primaryContainer } else { Color.Transparent },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Loop,
+                            contentDescription = null,
+                            modifier = Modifier.padding(8.dp).size(48.dp)
+                        )
+                    }
                 }
             }
             AnimatedVisibility(
@@ -158,6 +246,8 @@ fun MiniPlayerContainer(
     onPlay: () -> Unit,
     onPause: () -> Unit,
     onSeekToMs: (Long) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
 ) {
     // 750ms（まずはここ）: 500〜1000msで調整
     val uiState = produceState<MiniPlayerUi?>(initialValue = null, key1 = playbackService, key2 = selectedMidiFileUri) {
@@ -205,6 +295,8 @@ fun MiniPlayerContainer(
         onSeekTo = { ratio ->
             val ms = (ratio.coerceIn(0f, 1f) * uiState.durationMs).toLong()
             onSeekToMs(ms)
-        }
+        },
+        onPrevious = onPrevious,
+        onNext = onNext,
     )
 }

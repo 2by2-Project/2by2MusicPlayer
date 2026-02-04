@@ -226,7 +226,7 @@ class PlaybackService : MediaSessionService() {
             }
             val syncType: Int
             val syncParam: Long
-            if (lp.startTick > 0) {
+            if (lp.startTick > 0 && loopEnabledSnapshot) {
                 syncType = BASS.BASS_SYNC_MIXTIME
                 syncParam = bytes
             } else {
@@ -481,7 +481,7 @@ class PlaybackService : MediaSessionService() {
         )
     }
 
-    private suspend fun playNextTrackInCurrentFolder(shuffleEnabled: Boolean, alreadyLocked: Boolean = false) {
+    suspend fun playNextTrackInCurrentFolder(shuffleEnabled: Boolean, alreadyLocked: Boolean = false) {
         if (!alreadyLocked && !transitionInProgress.compareAndSet(false, true)) return
 
         val currentUri = currentUriString?.let { Uri.parse(it) }
@@ -497,6 +497,32 @@ class PlaybackService : MediaSessionService() {
         }
 
         val loaded = loadMidi(nextUri.toString())
+        if (loaded) {
+            mainHandler.post {
+                play()
+                bassPlayer.invalidateFromBass()
+                triggerNotificationUpdate()
+            }
+        }
+        transitionInProgress.set(false)
+    }
+
+    suspend fun playPreviousTrackInCurrentFolder(shuffleEnabled: Boolean, alreadyLocked: Boolean = false) {
+        if (!alreadyLocked && !transitionInProgress.compareAndSet(false, true)) return
+
+        val currentUri = currentUriString?.let { Uri.parse(it) }
+        if (currentUri == null) {
+            transitionInProgress.set(false)
+            return
+        }
+
+        val previousUri = findPreviousUriInCurrentFolder(currentUri, shuffleEnabled)
+        if (previousUri == null) {
+            transitionInProgress.set(false)
+            return
+        }
+
+        val loaded = loadMidi(previousUri.toString())
         if (loaded) {
             mainHandler.post {
                 play()
@@ -524,6 +550,26 @@ class PlaybackService : MediaSessionService() {
         }
 
         return playlist[(currentIndex + 1) % playlist.size]
+    }
+
+    private fun findPreviousUriInCurrentFolder(currentUri: Uri, shuffleEnabled: Boolean): Uri? {
+        val playlist = queryFolderPlaylist(currentUri)
+        if (playlist.isEmpty()) return null
+
+        val currentIndex = playlist.indexOfFirst { it.toString() == currentUri.toString() }
+        if (currentIndex < 0) return playlist.last()
+
+        if (shuffleEnabled) {
+            if (playlist.size <= 1) return playlist.first()
+            var candidate = currentIndex
+            while (candidate == currentIndex) {
+                candidate = random.nextInt(playlist.size)
+            }
+            return playlist[candidate]
+        }
+
+        val previousIndex = if (currentIndex == 0) playlist.lastIndex else currentIndex - 1
+        return playlist[previousIndex]
     }
 
     private fun queryFolderPlaylist(currentUri: Uri): List<Uri> {
