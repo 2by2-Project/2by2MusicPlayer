@@ -28,6 +28,8 @@ import dev.atsushieno.ktmidi.Midi1Music
 import dev.atsushieno.ktmidi.MidiChannelStatus
 import dev.atsushieno.ktmidi.read
 import java.io.File
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -155,6 +157,16 @@ class PlaybackService : MediaSessionService() {
             return false
         }
 
+        // Apply effect stuff
+        val (enabled, reverb) = runBlocking {
+            val enabled = SettingsDataStore.effectsEnabledFlow(this@PlaybackService).first()
+            val reverb = SettingsDataStore.reverbStrengthFlow(this@PlaybackService).first()
+            enabled to reverb
+        }
+
+        setEffectDisabled(!enabled)
+        setReverbStrength(reverb)
+
         // Current playing
         currentUriString = uriString
         currentTitle = resolveDisplayName(uri)
@@ -265,26 +277,6 @@ class PlaybackService : MediaSessionService() {
             flagsToSet,
             BASSMIDI.BASS_MIDI_NOFX
         )
-    }
-
-    fun getEffectDisabled(): Boolean {
-        val h = handles ?: return false
-        val flags = BASS.BASS_ChannelFlags(h.stream, 0, 0)
-        if (flags == -1L) {
-            return false
-        }
-        return (flags.toInt() and BASSMIDI.BASS_MIDI_NOFX) != 0
-    }
-
-    fun getReverbStrength(): Float {
-        val h = handles ?: return defaultValue.toFloat()
-        val out = BASS.FloatValue()   // ← BASS.java にある想定
-        val ok = BASS.BASS_ChannelGetAttribute(
-            h.stream,
-            BASSMIDI.BASS_ATTRIB_MIDI_REVERB,
-            out
-        )
-        return if (ok) out.value else defaultValue.toFloat()
     }
 
     fun setReverbStrength(value: Float) {

@@ -1,6 +1,7 @@
 package jp.project2by2.musicplayer
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -32,8 +33,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,7 +49,9 @@ import androidx.compose.ui.unit.dp
 import com.un4seen.bass.BASS
 import com.un4seen.bass.BASSMIDI
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -106,16 +111,14 @@ private fun SettingsScreen(playbackService: PlaybackService?) {
     var hasSoundFont by remember { mutableStateOf(File(context.cacheDir, "soundfont.sf2").exists()) }
 
     val svc = playbackService
-    val hasSvc = (svc != null)
 
     var effectsEnabled by remember { mutableStateOf(true) }
-    var reverbUi by remember { mutableStateOf(1f) }
+    var reverbStrength by remember { mutableStateOf(1f) }
 
     androidx.compose.runtime.LaunchedEffect(svc) {
-        if (svc != null) {
-            effectsEnabled = !svc.getEffectDisabled()
-            reverbUi = svc.getReverbStrength()
-        }
+        // Load settings
+        effectsEnabled = SettingsDataStore.effectsEnabledFlow(context).first()
+        reverbStrength = SettingsDataStore.reverbStrengthFlow(context).first()
     }
 
     fun resolveDisplayName(uri: Uri): String {
@@ -171,6 +174,10 @@ private fun SettingsScreen(playbackService: PlaybackService?) {
             LazyColumn(
                 modifier = Modifier.padding(8.dp)
             ) {
+                // MIDI Synthesizer
+                item {
+                    Text("MIDI Synthesizer", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(16.dp))
+                }
                 item {
                     val label = soundFontName ?: "Loaded"
                     SettingsInfoItem(title = "SoundFont", value = if (hasSoundFont) label else "Not set")
@@ -182,27 +189,30 @@ private fun SettingsScreen(playbackService: PlaybackService?) {
                     }
                 }
                 item {
-
-                }
-                item {
                     SettingsSwitchItem(
                         title = "Enable Reverb / Chorus effects",
                         checked = effectsEnabled,
                         onCheckedChange = { checked ->
                             effectsEnabled = checked
                             svc?.setEffectDisabled(!checked)
+                            scope.launch {
+                                SettingsDataStore.setEffectsEnabled(context, checked)
+                            }
                         }
                     )
                 }
                 item {
                     SettingsSliderItem(
                         title = "Reverb strength",
-                        value = reverbUi,
-                        enabled = hasSvc,
+                        value = reverbStrength,
+                        enabled = effectsEnabled,
                         valueRange = 0.0f..3.0f,
                         onValueChange = { v ->
-                            reverbUi = v
+                            reverbStrength = v
                             svc?.setReverbStrength(v)
+                            scope.launch {
+                                SettingsDataStore.setReverbStrength(context, v)
+                            }
                         }
                     )
                 }
@@ -259,6 +269,12 @@ fun SettingsSliderItem(
     onValueChange: (Float) -> Unit,
     enabled: Boolean = true
 ) {
+    var uiValue by remember { mutableFloatStateOf(value) }
+
+    LaunchedEffect(value) {
+        uiValue = value
+    }
+
     Column(
         modifier = Modifier
             .padding(horizontal = 16.dp, vertical = 16.dp)
@@ -277,8 +293,13 @@ fun SettingsSliderItem(
             )
         }
         Slider(
-            value = value,
-            onValueChange = onValueChange,
+            value = uiValue,
+            onValueChange = { v ->
+                uiValue = v
+            },
+            onValueChangeFinished = {
+                onValueChange(uiValue)
+            },
             valueRange = valueRange,
             enabled = enabled,
             modifier = Modifier.fillMaxWidth()
