@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">2by2 Music Player</string>
+    <string name="error_soundfont_not_set">サウンドフォントが未設定です</string>
+    <string name="error_playback_service_not_ready">Playback serviceの初期化に失敗しました</string>
+    <string name="error_failed_to_load_midi">MIDIまたはサウンドフォントの読み込みに失敗しました</string>
+    <string name="error_failed_to_start_playback">再生時にエラーが発生しました</string>
+    <string name="back">戻る</string>
+    <string name="unknown">不明</string>
+    <string name="app_logo">アプリロゴ</string>
+    <string name="search">検索</string>
+    <string name="settings">設定</string>
+    <string name="topbar_search_summary">ファイル名で検索</string>
+    <string name="info_grant_storage_permission">ストレージの権限を付与してください</string>
+    <string name="info_no_mid_files_found">MIDIファイルがありません</string>
+    <string name="info_no_matching_files">一致するファイルが見つかりませんでした</string>
+    <string name="settings_category_midi_synthesizer">MIDI演奏オプション</string>
+    <string name="settings_soundfont_title">サウンドフォント</string>
+    <string name="settings_soundfont_loaded">読込済</string>
+    <string name="settings_soundfont_not_set">未設定</string>
+    <string name="settings_soundfont_load_button">サウンドフォントを読み込む (*.sf2)</string>
+    <string name="settings_effects_toggle_title">リバーブ・コーラス効果</string>
+    <string name="settings_effects_reverb_strength">リバーブ効果の量</string>
+    <string name="settings_category_playback">再生オプション</string>
+    <string name="settings_playback_loop_toggle">ループ再生</string>
+    <string name="settings_playback_loop_play_indefinitely">無限ループ</string>
+    <string name="settings_playback_loop_play_indefinitely_when_detected">無限ループ（ループ地点がある場合）</string>
+    <string name="settings_playback_loop_loop_and_fade">ループ後フェードアウト</string>
+    <string name="settings_playback_loop_loop_and_fade_when_detected">ループ後フェードアウト（ループ地点がある場合）</string>
+    <string name="settings_playback_shuffle_toggle">シャッフル再生</string>
+    <string name="info_current_time">現在再生地点: %1$d ms</string>
+    <string name="info_loop_point">ループ地点: %1$d ms</string>
+    <string name="info_end_of_track">曲の終了地点: %1$d ms</string>
+    <string name="info_no_file_selected">ファイルが選択されていません</string>
+    <string name="notification_channel_name">再生コントロール</string>
+    <string name="unknown_artist">不明なアーティスト</string>
+</resources>

@@ -13,7 +13,7 @@
     <string name="info_grant_storage_permission">Please grant storage permission</string>
     <string name="info_no_mid_files_found">No .mid files found</string>
     <string name="info_no_matching_files">No matching files</string>
-    <string name="duration_placeholder">--:--</string>
+    <string name="duration_placeholder" translatable="false">--:--</string>
     <string name="settings_category_midi_synthesizer">MIDI Synthesizer</string>
     <string name="settings_soundfont_title">SoundFont</string>
     <string name="settings_soundfont_loaded">Loaded</string>
@@ -32,7 +32,7 @@
     <string name="info_loop_point">Loop point: %1$d ms</string>
     <string name="info_end_of_track">End of track: %1$d ms</string>
     <string name="info_no_file_selected">No file selected</string>
-    <string name="playback_session_id">2by2Playback</string>
+    <string name="playback_session_id" translatable="false">2by2Playback</string>
     <string name="notification_channel_name">Playback</string>
     <string name="unknown_artist">Unknown Artist</string>
 </resources>
