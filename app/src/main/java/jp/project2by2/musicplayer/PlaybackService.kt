@@ -227,7 +227,7 @@ class PlaybackService : MediaSessionService() {
             }
             val syncType: Int
             val syncParam: Long
-            if (lp.startTick > 0 && loopEnabledSnapshot) {
+            if (loopEnabledSnapshot && lp.hasLoopStartMarker) {
                 syncType = BASS.BASS_SYNC_MIXTIME
                 syncParam = bytes
             } else {
