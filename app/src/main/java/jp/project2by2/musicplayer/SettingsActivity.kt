@@ -24,15 +24,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedButton
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -216,6 +219,21 @@ private fun SettingsScreen(playbackService: PlaybackService?) {
                         )
                         Text(stringResource(id = R.string.settings_soundfont_recommended_button))
                     }
+                }
+                item {
+                    val maxVoices by SettingsDataStore.maxVoicesFlow(context).collectAsState(initial = 40)
+                    SettingsDropdownItem(
+                        title = stringResource(id = R.string.settings_max_voices_title),
+                        options = listOf("20", "40", "100", "200"),
+                        defaultValue = maxVoices.toString(),
+                        onSelectedChange = {
+                            scope.launch {
+                                val maxVoices = it.toIntOrNull() ?: 40
+                                SettingsDataStore.setMaxVoices(context, maxVoices)
+                                svc?.setMaxVoices(maxVoices)
+                            }
+                        }
+                    )
                 }
                 item {
                     SettingsSwitchItem(
@@ -471,5 +489,64 @@ private fun SettingsRadioItem(
         )
         Spacer(Modifier.width(16.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsDropdownItem(
+    title: String,
+    options: List<String>,
+    defaultValue: String,
+    onSelectedChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var selected by remember(defaultValue) { mutableStateOf(defaultValue) }
+
+    LaunchedEffect(defaultValue) {
+        if (defaultValue in options) {
+            selected = defaultValue
+        } else {
+            selected = options.first()
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = title, style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.weight(1f))
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = !expanded },
+        ) {
+            TextField(
+                value = selected,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier
+                    .menuAnchor()
+                    .widthIn(min = 80.dp, max = 180.dp)
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = {
+                            selected = option
+                            onSelectedChange(option)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
     }
 }

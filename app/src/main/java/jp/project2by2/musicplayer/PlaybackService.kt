@@ -196,9 +196,15 @@ class PlaybackService : MediaSessionService() {
             val reverb = SettingsDataStore.reverbStrengthFlow(this@PlaybackService).first()
             enabled to reverb
         }
-
         setEffectDisabled(!enabled)
         setReverbStrength(reverb)
+
+        // Apply max voices
+        val maxVoices = runBlocking {
+            val maxVoices = SettingsDataStore.maxVoicesFlow(this@PlaybackService).first()
+            maxVoices
+        }
+        setMaxVoices(maxVoices)
 
         // Current playing
         currentUriString = uriString
@@ -322,6 +328,16 @@ class PlaybackService : MediaSessionService() {
                 it.stream,
                 BASSMIDI.BASS_ATTRIB_MIDI_REVERB,
                 value
+            )
+        }
+    }
+
+    fun setMaxVoices(value: Int) {
+        handles?.let {
+            BASS.BASS_ChannelSetAttribute(
+                it.stream,
+                BASSMIDI.BASS_ATTRIB_MIDI_VOICES,
+                value.toFloat()
             )
         }
     }
