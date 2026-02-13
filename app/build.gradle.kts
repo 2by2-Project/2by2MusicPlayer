@@ -14,8 +14,8 @@ android {
         applicationId = "jp.project2by2.musicplayer"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1c"
+        versionCode = 4
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
