@@ -20,6 +20,7 @@
     <string name="settings_soundfont_loaded">読込済</string>
     <string name="settings_soundfont_not_set">未設定</string>
     <string name="settings_soundfont_load_button">サウンドフォントを読み込む (*.sf2)</string>
+    <string name="settings_max_voices_title">最大発音数</string>
     <string name="settings_effects_toggle_title">リバーブ・コーラス効果</string>
     <string name="settings_effects_reverb_strength">リバーブ効果の量</string>
     <string name="settings_category_playback">再生オプション</string>

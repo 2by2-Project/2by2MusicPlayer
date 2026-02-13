@@ -20,6 +20,7 @@
     <string name="settings_soundfont_loaded">Loaded</string>
     <string name="settings_soundfont_not_set">Not set</string>
     <string name="settings_soundfont_load_button">Load SoundFont (*.sf2)</string>
+    <string name="settings_max_voices_title">Max Voices</string>
     <string name="settings_effects_toggle_title">Enable Reverb / Chorus effects</string>
     <string name="settings_effects_reverb_strength">Reverb strength</string>
     <string name="settings_category_playback">Playback</string>

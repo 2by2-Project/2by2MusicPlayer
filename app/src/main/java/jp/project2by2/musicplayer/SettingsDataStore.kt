@@ -25,6 +25,8 @@ object SettingsDataStore {
 
     private val demoFilesLoadedKey = booleanPreferencesKey("demo_files_loaded")
 
+    private val maxVoicesKey = intPreferencesKey("max_voices")
+
     fun soundFontNameFlow(context: Context): Flow<String?> {
         return context.settingsDataStore.data.map { prefs ->
             prefs[soundFontNameKey]
@@ -61,6 +63,11 @@ object SettingsDataStore {
             .map { it[demoFilesLoadedKey] ?: false }
             .distinctUntilChanged()
 
+    fun maxVoicesFlow(context: Context): Flow<Int> =
+        context.settingsDataStore.data
+            .map { it[maxVoicesKey] ?: 40 }
+            .distinctUntilChanged()
+
     suspend fun setSoundFontName(context: Context, name: String) {
         context.settingsDataStore.edit { prefs ->
             prefs[soundFontNameKey] = name
@@ -89,5 +96,9 @@ object SettingsDataStore {
 
     suspend fun setDemoFilesLoaded(context: Context, loaded: Boolean) {
         context.settingsDataStore.edit { it[demoFilesLoadedKey] = loaded }
+    }
+
+    suspend fun setMaxVoices(context: Context, maxVoices: Int) {
+        context.settingsDataStore.edit { it[maxVoicesKey] = maxVoices }
     }
 }
