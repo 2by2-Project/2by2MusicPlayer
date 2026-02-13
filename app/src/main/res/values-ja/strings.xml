@@ -45,4 +45,7 @@
     <string name="soundfont_size_small">軽量</string>
     <string name="soundfont_size_medium">中程度</string>
     <string name="soundfont_size_large">高品質</string>
+    <string name="button_sample_demo_music">サンプルMIDI一覧を表示</string>
+    <string name="folder_demo_name">サンプルMIDI楽曲</string>
+    <string name="loading_demo_files">サンプルMIDIファイルを読み込んでいます…</string>
 </resources>

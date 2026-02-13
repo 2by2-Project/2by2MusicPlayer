@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -55,12 +56,15 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +72,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -98,7 +103,10 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.google.common.base.Splitter
 import com.google.common.util.concurrent.MoreExecutors
+import dev.atsushieno.ktmidi.Midi1Music
+import dev.atsushieno.ktmidi.read
 import jp.project2by2.musicplayer.ui.theme._2by2MusicPlayerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -174,6 +182,9 @@ fun MusicPlayerMainScreen(
 
     val midiFiles = remember { mutableStateListOf<MidiFileItem>() }
     val folderItems = remember { mutableStateListOf<FolderItem>() }
+
+    var isDemoLoading by remember { mutableStateOf(false) }
+    var demoFilesLoaded by remember { mutableStateOf(false) }
 
     // Media3
     val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
@@ -262,6 +273,21 @@ fun MusicPlayerMainScreen(
 
         folderItems.clear()
         folderItems.addAll(folders)
+
+        // Restore demo files from persistent storage if previously loaded
+        val loaded = SettingsDataStore.demoFilesLoadedFlow(context).first()
+        demoFilesLoaded = loaded
+        if (loaded) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val demoFiles = queryDemoMidiFiles(context)
+                    midiFiles.removeAll { it.folderKey == "assets_demo" }
+                    midiFiles.addAll(demoFiles)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -329,6 +355,47 @@ fun MusicPlayerMainScreen(
                 },
                 MoreExecutors.directExecutor()
             )
+        }
+    }
+
+    fun handleDemoMusicClick() {
+        if (isDemoLoading) return
+
+        if (demoFilesLoaded) {
+            // Already loaded, just navigate
+            selectedFolderKey = "assets_demo"
+            selectedFolderName = context.getString(R.string.folder_demo_name)
+            selectedFolderCoverUri = null
+            return
+        }
+
+        // Load demo files
+        isDemoLoading = true
+        scope.launch {
+            try {
+                val demoFiles = queryDemoMidiFiles(context)
+
+                // Remove any existing demo files first
+                midiFiles.removeAll { it.folderKey == "assets_demo" }
+                // Add new demo files
+                midiFiles.addAll(demoFiles)
+
+                demoFilesLoaded = true
+                SettingsDataStore.setDemoFilesLoaded(context, true)
+                isDemoLoading = false
+
+                // Navigate to demo folder
+                selectedFolderKey = "assets_demo"
+                selectedFolderName = context.getString(R.string.folder_demo_name)
+                selectedFolderCoverUri = null
+            } catch (e: Exception) {
+                isDemoLoading = false
+                Toast.makeText(
+                    context,
+                    "Failed to load demo files: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -489,10 +556,34 @@ fun MusicPlayerMainScreen(
                         Text(stringResource(id = R.string.info_grant_storage_permission))
                     }
                 } else if (midiFiles.isEmpty()) {
-                    Text(
-                        text = stringResource(id = R.string.info_no_mid_files_found),
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = stringResource(id = R.string.info_no_mid_files_found),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center
+                        )
+                        androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(24.dp))
+
+                        if (isDemoLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(id = R.string.loading_demo_files),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        } else {
+                            DemoMusicButton(
+                                onClick = { handleDemoMusicClick() },
+                                showDividers = false
+                            )
+                        }
+                    }
                 } else {
                     val isSearching = isSearchActive && searchQuery.isNotBlank()
                     val screenState: Pair<BrowseScreen, String?> = when {
@@ -540,7 +631,9 @@ fun MusicPlayerMainScreen(
                                     selectedFolderKey = folder.key
                                     selectedFolderName = folder.name
                                     selectedFolderCoverUri = folder.coverUri
-                                }
+                                },
+                                onDemoMusicClick = { handleDemoMusicClick() },
+                                isDemoLoading = isDemoLoading
                             )
                             BrowseScreen.Files -> {
                                 val items = midiFiles.filter { it.folderKey == folderKey }
@@ -666,7 +759,9 @@ private fun FolderGrid(
     items: List<FolderItem>,
     gridState: LazyGridState = rememberLazyGridState(),
     animatedKeys: MutableSet<String> = remember { mutableSetOf() },
-    onFolderClick: (FolderItem) -> Unit
+    onFolderClick: (FolderItem) -> Unit,
+    onDemoMusicClick: () -> Unit,
+    isDemoLoading: Boolean = false
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -674,7 +769,7 @@ private fun FolderGrid(
         state = gridState,
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
+        contentPadding = PaddingValues(16.dp)
     ) {
         itemsIndexed(items, key = { _, item -> item.key }) { index, folder ->
             FolderCardAnimated(
@@ -683,6 +778,32 @@ private fun FolderGrid(
                 animatedKeys = animatedKeys,
                 onClick = { onFolderClick(folder) }
             )
+        }
+
+        // Demo music button at bottom - spans full width
+        item(
+            span = { GridItemSpan(maxLineSpan) }
+        ) {
+            if (isDemoLoading) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(id = R.string.loading_demo_files),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            } else {
+                DemoMusicButton(
+                    onClick = onDemoMusicClick,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+            }
         }
     }
 }
@@ -758,6 +879,36 @@ private fun FolderCard(
                     .basicMarquee(Int.MAX_VALUE),
                 maxLines = 1
             )
+        }
+    }
+}
+
+@Composable
+private fun DemoMusicButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    showDividers: Boolean = true
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        if (showDividers) {
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 8.dp),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+        }
+        TextButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            onClick = onClick
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Audiotrack,
+                contentDescription = null,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            Text(stringResource(id = R.string.button_sample_demo_music))
         }
     }
 }
@@ -844,6 +995,78 @@ private fun queryMidiFiles(context: Context): List<MidiFileItem> {
         }
     }
     return results
+}
+
+private fun calculateMidiDurationMs(midiFile: File): Long {
+    return try {
+        midiFile.inputStream().use { inputStream ->
+            val bytes = inputStream.readBytes().toList()
+            val music = Midi1Music().apply { read(bytes) }
+
+            // Find the maximum tick from all tracks
+            var maxTick = 0
+            for (track in music.tracks) {
+                var tick = 0
+                for (e in track.events) {
+                    tick += e.deltaTime
+                }
+                if (tick > maxTick) {
+                    maxTick = tick
+                }
+            }
+
+            // Convert tick to milliseconds
+            music.getTimePositionInMillisecondsForTick(maxTick).toLong()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        0L
+    }
+}
+
+private suspend fun queryDemoMidiFiles(context: Context): List<MidiFileItem> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<MidiFileItem>()
+    val demoFolderName = context.getString(R.string.folder_demo_name)
+
+    try {
+        val assetManager = context.assets
+        val demoFiles = assetManager.list("demo") ?: emptyArray()
+
+        for (fileName in demoFiles) {
+            if (!fileName.endsWith(".mid", ignoreCase = true) &&
+                !fileName.endsWith(".midi", ignoreCase = true)) {
+                continue
+            }
+
+            // Copy asset to files directory (persistent storage) to get URI
+            val cacheFile = File(context.filesDir, "demo/$fileName")
+            if (!cacheFile.exists()) {
+                cacheFile.parentFile?.mkdirs()
+                assetManager.open("demo/$fileName").use { input ->
+                    cacheFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+
+            val uri = Uri.fromFile(cacheFile)
+
+            // Calculate MIDI file duration using ktmidi
+            val durationMs = calculateMidiDurationMs(cacheFile)
+
+            results.add(MidiFileItem(
+                uri = uri,
+                title = fileName,
+                folderName = demoFolderName,
+                folderKey = "assets_demo",
+                durationMs = durationMs
+            ))
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    return@withContext results.sortedBy { it.title.lowercase() }
 }
 
 private fun extractFolderKey(relativePath: String?, dataPath: String?): String {

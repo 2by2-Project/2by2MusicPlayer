@@ -49,4 +49,7 @@
     <string name="soundfont_size_small">Small</string>
     <string name="soundfont_size_medium">Medium</string>
     <string name="soundfont_size_large">Large</string>
+    <string name="button_sample_demo_music">Browse Sample MIDIs</string>
+    <string name="folder_demo_name">Sample MIDI musics</string>
+    <string name="loading_demo_files">Loading sample MIDI files…</string>
 </resources>

@@ -23,6 +23,8 @@ object SettingsDataStore {
     private val loopModeKey = intPreferencesKey("loop_mode")
     private val shuffleEnabledKey = booleanPreferencesKey("shuffle_enabled")
 
+    private val demoFilesLoadedKey = booleanPreferencesKey("demo_files_loaded")
+
     fun soundFontNameFlow(context: Context): Flow<String?> {
         return context.settingsDataStore.data.map { prefs ->
             prefs[soundFontNameKey]
@@ -54,6 +56,11 @@ object SettingsDataStore {
             .map { it[shuffleEnabledKey] ?: false }
             .distinctUntilChanged()
 
+    fun demoFilesLoadedFlow(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { it[demoFilesLoadedKey] ?: false }
+            .distinctUntilChanged()
+
     suspend fun setSoundFontName(context: Context, name: String) {
         context.settingsDataStore.edit { prefs ->
             prefs[soundFontNameKey] = name
@@ -78,5 +85,9 @@ object SettingsDataStore {
 
     suspend fun setShuffleEnabled(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { it[shuffleEnabledKey] = enabled }
+    }
+
+    suspend fun setDemoFilesLoaded(context: Context, loaded: Boolean) {
+        context.settingsDataStore.edit { it[demoFilesLoadedKey] = loaded }
     }
 }

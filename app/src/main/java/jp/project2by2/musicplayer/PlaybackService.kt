@@ -572,8 +572,28 @@ class PlaybackService : MediaSessionService() {
         return playlist[previousIndex]
     }
 
+    private fun queryDemoPlaylist(): List<Uri> {
+        val demoDir = File(filesDir, "demo")
+        if (!demoDir.exists() || !demoDir.isDirectory) {
+            return emptyList()
+        }
+
+        val midiFiles = demoDir.listFiles()?.filter { file ->
+            file.isFile && (file.name.endsWith(".mid", ignoreCase = true) ||
+                    file.name.endsWith(".midi", ignoreCase = true))
+        }?.sortedBy { it.name.lowercase() } ?: emptyList()
+
+        return midiFiles.map { Uri.fromFile(it) }
+    }
+
     private fun queryFolderPlaylist(currentUri: Uri): List<Uri> {
         val folderKey = resolveFolderKey(currentUri) ?: return emptyList()
+
+        // Handle demo files separately (they are not in MediaStore)
+        if (folderKey == "assets_demo") {
+            return queryDemoPlaylist()
+        }
+
         val collection = MediaStore.Files.getContentUri("external")
         val projection = if (Build.VERSION.SDK_INT >= 29) {
             arrayOf(
@@ -628,6 +648,19 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun resolveFolderKey(uri: Uri): String? {
+        // Handle file:// URIs (e.g., demo files from filesDir)
+        if (uri.scheme == "file") {
+            val path = uri.path ?: return null
+            // Check if this is a demo file
+            if (path.contains("/demo/")) {
+                return "assets_demo"
+            }
+            // Extract folder from file path
+            val parent = path.substringBeforeLast('/', "")
+            return if (parent.isNotBlank()) parent else null
+        }
+
+        // Handle content:// URIs from MediaStore
         val projection = if (Build.VERSION.SDK_INT >= 29) {
             arrayOf(
                 MediaStore.Files.FileColumns.RELATIVE_PATH,
