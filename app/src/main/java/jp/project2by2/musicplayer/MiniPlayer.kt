@@ -240,7 +240,7 @@ fun MiniPlayerBar(
 @Composable
 fun MiniPlayerContainer(
     playbackService: PlaybackService?,
-    selectedMidiFileUri: Uri?,
+    selectedMusicFileUri: Uri?,
     onPlay: () -> Unit,
     onPause: () -> Unit,
     onSeekToMs: (Long) -> Unit,
@@ -249,7 +249,7 @@ fun MiniPlayerContainer(
 ) {
     val context = LocalContext.current
     // 750ms（まずはここ）: 500〜1000msで調整
-    val uiState = produceState<MiniPlayerUi?>(initialValue = null, key1 = playbackService, key2 = selectedMidiFileUri) {
+    val uiState = produceState<MiniPlayerUi?>(initialValue = null, key1 = playbackService, key2 = selectedMusicFileUri) {
         val service = playbackService ?: run { value = null; return@produceState }
 
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
@@ -274,7 +274,7 @@ fun MiniPlayerContainer(
         }
     }.value
 
-    if (uiState == null || selectedMidiFileUri == null) return
+    if (uiState == null || selectedMusicFileUri == null) return
 
     // derivedStateOf（局所化）
     val progress by remember(uiState.positionMs, uiState.durationMs) {

@@ -1,6 +1,7 @@
 package jp.project2by2.musicplayer
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -181,7 +182,7 @@ private fun loadFileDetails(context: Context, uri: Uri): FileDetailsSnapshot {
     val mimeType = resolveMimeType(context, uri).ifBlank { context.getString(R.string.unknown) }
 
     val (file, isTemp) = resolveFile(context, uri)
-    val durationMs = file?.let { calculateMidiDurationMs(it) } ?: 0L
+    val durationMs = file?.let { calculateMediaDurationMs(it, displayName) } ?: 0L
     val loopPoint = file?.let { PlaybackService.findLoopPoint(it) }
     if (isTemp) {
         file?.delete()
@@ -274,6 +275,29 @@ private fun resolveFile(context: Context, uri: Uri): Pair<File?, Boolean> {
     } catch (_: Exception) {
         tempFile.delete()
         Pair(null, true)
+    }
+}
+
+private fun calculateMediaDurationMs(file: File, displayName: String): Long {
+    val name = if (displayName.isBlank()) file.name else displayName
+    val lower = name.lowercase()
+    val isMidi = lower.endsWith(".mid") || lower.endsWith(".midi")
+    return if (isMidi) {
+        calculateMidiDurationMs(file)
+    } else {
+        calculateAudioDurationMs(file)
+    }
+}
+
+private fun calculateAudioDurationMs(file: File): Long {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(file.absolutePath)
+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+    } catch (_: Exception) {
+        0L
+    } finally {
+        retriever.release()
     }
 }
 

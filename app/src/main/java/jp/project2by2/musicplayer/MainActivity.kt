@@ -173,7 +173,7 @@ fun MusicPlayerMainScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var selectedMidiFileUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedMusicFileUri by remember { mutableStateOf<Uri?>(null) }
 
     var playbackService by remember { mutableStateOf<PlaybackService?>(null) }
     var isBound by remember { mutableStateOf(false) }
@@ -187,7 +187,7 @@ fun MusicPlayerMainScreen(
     var selectedFolderName by remember { mutableStateOf<String?>(null) }
     var selectedFolderCoverUri by remember { mutableStateOf<Uri?>(null) }
 
-    val midiFiles = remember { mutableStateListOf<MidiFileItem>() }
+    val musicFiles = remember { mutableStateListOf<MusicFileItem>() }
     val folderItems = remember { mutableStateListOf<FolderItem>() }
 
     var isDemoLoading by remember { mutableStateOf(false) }
@@ -261,7 +261,7 @@ fun MusicPlayerMainScreen(
         val service = playbackService ?: return@LaunchedEffect
 
         while (playbackService === service) {
-            selectedMidiFileUri = service.getCurrentUriString()?.let { Uri.parse(it) }
+            selectedMusicFileUri = service.getCurrentUriString()?.let { Uri.parse(it) }
             delay(250)
         }
     }
@@ -270,13 +270,13 @@ fun MusicPlayerMainScreen(
         if (!hasAudioPermission) return@LaunchedEffect
 
         val (files, folders) = withContext(Dispatchers.IO) {
-            val f = queryMidiFiles(context)
+            val f = queryMusicFiles(context)
             val d = buildFolderItems(context, f, hasImagePermission)
             f to d
         }
 
-        midiFiles.clear()
-        midiFiles.addAll(files)
+        musicFiles.clear()
+        musicFiles.addAll(files)
 
         folderItems.clear()
         folderItems.addAll(folders)
@@ -287,9 +287,9 @@ fun MusicPlayerMainScreen(
         if (loaded) {
             withContext(Dispatchers.IO) {
                 try {
-                    val demoFiles = queryDemoMidiFiles(context)
-                    midiFiles.removeAll { it.folderKey == "assets_demo" }
-                    midiFiles.addAll(demoFiles)
+                    val demoFiles = queryDemoMusicFiles(context)
+                    musicFiles.removeAll { it.folderKey == "assets_demo" }
+                    musicFiles.addAll(demoFiles)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -328,13 +328,24 @@ fun MusicPlayerMainScreen(
         }
     }
 
-    fun handleMidiTap(uri: Uri) {
-        val cacheSoundFontFile = File(context.cacheDir, "soundfont.sf2")
-        if (!cacheSoundFontFile.exists()) {
-            Toast.makeText(context, context.getString(R.string.error_soundfont_not_set), Toast.LENGTH_LONG).show()
-            return
+    fun isMidiUri(uri: Uri): Boolean {
+        val mime = context.contentResolver.getType(uri)?.lowercase()
+        if (mime == "audio/midi" || mime == "audio/x-midi" || mime == "application/midi" || mime == "application/x-midi") {
+            return true
         }
-        selectedMidiFileUri = uri
+        val name = uri.lastPathSegment?.substringAfterLast('/')?.lowercase().orEmpty()
+        return name.endsWith(".mid") || name.endsWith(".midi")
+    }
+
+    fun handleMusicTap(uri: Uri) {
+        if (isMidiUri(uri)) {
+            val cacheSoundFontFile = File(context.cacheDir, "soundfont.sf2")
+            if (!cacheSoundFontFile.exists()) {
+                Toast.makeText(context, context.getString(R.string.error_soundfont_not_set), Toast.LENGTH_LONG).show()
+                return
+            }
+        }
+        selectedMusicFileUri = uri
 
         // Set artist and cover uri
         val service = playbackService
@@ -347,7 +358,7 @@ fun MusicPlayerMainScreen(
 
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                service.loadMidi(uri.toString())
+                service.loadMedia(uri.toString())
             }
             if (!ok) {
                 Toast.makeText(context, context.getString(R.string.error_failed_to_load_midi), Toast.LENGTH_SHORT).show()
@@ -365,6 +376,10 @@ fun MusicPlayerMainScreen(
         }
     }
 
+    fun handleMidiTap(uri: Uri) {
+        handleMusicTap(uri)
+    }
+
     fun handleDemoMusicClick() {
         if (isDemoLoading) return
 
@@ -380,12 +395,12 @@ fun MusicPlayerMainScreen(
         isDemoLoading = true
         scope.launch {
             try {
-                val demoFiles = queryDemoMidiFiles(context)
+                val demoFiles = queryDemoMusicFiles(context)
 
                 // Remove any existing demo files first
-                midiFiles.removeAll { it.folderKey == "assets_demo" }
+                musicFiles.removeAll { it.folderKey == "assets_demo" }
                 // Add new demo files
-                midiFiles.addAll(demoFiles)
+                musicFiles.addAll(demoFiles)
 
                 demoFilesLoaded = true
                 SettingsDataStore.setDemoFilesLoaded(context, true)
@@ -492,7 +507,7 @@ fun MusicPlayerMainScreen(
         },
         bottomBar = {
             AnimatedVisibility(
-                visible = selectedMidiFileUri != null,
+                visible = selectedMusicFileUri != null,
                 enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(400)) +
                         fadeIn(animationSpec = tween(400)),
                 exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(400)) +
@@ -500,7 +515,7 @@ fun MusicPlayerMainScreen(
             ) {
                 MiniPlayerContainer(
                     playbackService = playbackService,
-                    selectedMidiFileUri = selectedMidiFileUri,
+                    selectedMusicFileUri = selectedMusicFileUri,
                     onPlay = { controllerFuture.get().play() },
                     onPause = { controllerFuture.get().pause() },
                     onSeekToMs = { ms -> controllerFuture.get().seekTo(ms) },
@@ -562,7 +577,7 @@ fun MusicPlayerMainScreen(
                     ElevatedButton(onClick = { storagePermissionLauncher.launch(permissionsToRequest) }) {
                         Text(stringResource(id = R.string.info_grant_storage_permission))
                     }
-                } else if (midiFiles.isEmpty()) {
+                } else if (musicFiles.isEmpty()) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -643,26 +658,26 @@ fun MusicPlayerMainScreen(
                                 isDemoLoading = isDemoLoading
                             )
                             BrowseScreen.Files -> {
-                                val items = midiFiles.filter { it.folderKey == folderKey }
-                                MidiFileList(
+                                val items = musicFiles.filter { it.folderKey == folderKey }
+                                MusicFileList(
                                     items = items,
-                                    selectedUri = selectedMidiFileUri,
-                                    onItemClick = { handleMidiTap(it) }
+                                    selectedUri = selectedMusicFileUri,
+                                    onItemClick = { handleMusicTap(it) }
                                 )
                             }
                             BrowseScreen.Search -> {
                                 val baseItems = if (folderKey != null) {
-                                    midiFiles.filter { it.folderKey == folderKey }
+                                    musicFiles.filter { it.folderKey == folderKey }
                                 } else {
-                                    midiFiles.toList()
+                                    musicFiles.toList()
                                 }
                                 val items = baseItems.filter {
                                     it.title.contains(searchQuery, ignoreCase = true)
                                 }
-                                MidiFileList(
+                                MusicFileList(
                                     items = items,
-                                    selectedUri = selectedMidiFileUri,
-                                    onItemClick = { handleMidiTap(it) }
+                                    selectedUri = selectedMusicFileUri,
+                                    onItemClick = { handleMusicTap(it) }
                                 )
                             }
                         }
@@ -681,8 +696,8 @@ fun MusicPlayerMainScreen(
 }
 
 @Composable
-private fun MidiFileList(
-    items: List<MidiFileItem>,
+private fun MusicFileList(
+    items: List<MusicFileItem>,
     selectedUri: Uri?,
     onItemClick: (Uri) -> Unit
 ) {
@@ -698,7 +713,7 @@ private fun MidiFileList(
         contentPadding = PaddingValues(bottom = 72.dp)
     ) {
         items(items, key = { it.uri }) { item ->
-            MidiFileRow(
+            MusicFileRow(
                 item = item,
                 isSelected = item.uri == selectedUri,
                 onClick = { onItemClick(item.uri) }
@@ -709,8 +724,8 @@ private fun MidiFileList(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MidiFileRow(
-    item: MidiFileItem,
+private fun MusicFileRow(
+    item: MusicFileItem,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -766,7 +781,7 @@ private fun MidiFileRow(
     }
 
     if (showActions) {
-        MidiFileActionsDialog(
+        MusicFileActionsDialog(
             title = item.title,
             onDismiss = { showActions = false },
             onPlay = {
@@ -775,7 +790,7 @@ private fun MidiFileRow(
             },
             onShare = {
                 showActions = false
-                shareMidiFile(context, item.uri)
+                shareMusicFile(context, item.uri)
             },
             onDetails = {
                 showActions = false
@@ -790,7 +805,7 @@ private fun MidiFileRow(
 }
 
 @Composable
-private fun MidiFileActionsDialog(
+private fun MusicFileActionsDialog(
     title: String,
     onDismiss: () -> Unit,
     onPlay: () -> Unit,
@@ -997,7 +1012,7 @@ private enum class BrowseScreen {
     Search
 }
 
-private data class MidiFileItem(
+private data class MusicFileItem(
     val uri: Uri,
     val title: String,
     val folderName: String,
@@ -1011,7 +1026,7 @@ private data class FolderItem(
     val coverUri: Uri?
 )
 
-private fun queryMidiFiles(context: Context): List<MidiFileItem> {
+private fun queryMusicFiles(context: Context): List<MusicFileItem> {
     val collection = MediaStore.Files.getContentUri("external")
     val projection = if (Build.VERSION.SDK_INT >= 29) {
         arrayOf(
@@ -1032,18 +1047,36 @@ private fun queryMidiFiles(context: Context): List<MidiFileItem> {
     val selection = (
         "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
             "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+            "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
+            "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
+            "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
             "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
             "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
         )
     val selectionArgs = arrayOf(
         "audio/midi",
         "audio/x-midi",
+        "audio/ogg",
+        "application/ogg",
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/wav",
+        "audio/x-wav",
         "%.mid",
-        "%.midi"
+        "%.midi",
+        "%.ogg",
+        "%.mp3",
+        "%.wav"
     )
     val sortOrder = "${MediaStore.Files.FileColumns.DISPLAY_NAME} ASC"
 
-    val results = mutableListOf<MidiFileItem>()
+    val results = mutableListOf<MusicFileItem>()
     context.contentResolver.query(
         collection,
         projection,
@@ -1069,7 +1102,7 @@ private fun queryMidiFiles(context: Context): List<MidiFileItem> {
             val folderKey = extractFolderKey(relativePath, dataPath)
             val folderName = extractFolderName(folderKey)
             val uri = ContentUris.withAppendedId(collection, id)
-            results.add(MidiFileItem(uri, name, folderName, folderKey, duration))
+            results.add(MusicFileItem(uri, name, folderName, folderKey, duration))
         }
     }
     return results
@@ -1102,8 +1135,8 @@ private fun calculateMidiDurationMs(midiFile: File): Long {
     }
 }
 
-private suspend fun queryDemoMidiFiles(context: Context): List<MidiFileItem> = withContext(Dispatchers.IO) {
-    val results = mutableListOf<MidiFileItem>()
+private suspend fun queryDemoMusicFiles(context: Context): List<MusicFileItem> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<MusicFileItem>()
     val demoFolderName = context.getString(R.string.folder_demo_name)
 
     try {
@@ -1132,7 +1165,7 @@ private suspend fun queryDemoMidiFiles(context: Context): List<MidiFileItem> = w
             // Calculate MIDI file duration using ktmidi
             val durationMs = calculateMidiDurationMs(cacheFile)
 
-            results.add(MidiFileItem(
+            results.add(MusicFileItem(
                 uri = uri,
                 title = fileName,
                 folderName = demoFolderName,
@@ -1171,7 +1204,7 @@ private fun extractFolderName(folderKey: String): String {
 
 private fun buildFolderItems(
     context: Context,
-    items: List<MidiFileItem>,
+    items: List<MusicFileItem>,
     hasImagePermission: Boolean
 ): List<FolderItem> {
     val grouped = items.groupBy { it.folderKey }
@@ -1193,7 +1226,7 @@ private fun formatDuration(durationMs: Long): String {
     return String.format("%d:%02d", minutes, seconds)
 }
 
-private fun shareMidiFile(context: Context, uri: Uri) {
+private fun shareMusicFile(context: Context, uri: Uri) {
     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
     val shareIntent = Intent(Intent.ACTION_SEND).apply {
         type = mimeType

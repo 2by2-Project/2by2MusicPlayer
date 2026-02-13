@@ -48,7 +48,7 @@ class PlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val random = Random(System.currentTimeMillis())
 
-    private var handles: MidiHandles? = null
+    private var handles: PlaybackHandles? = null
     private var loopPoint: LoopPoint? = null
     private var syncProc: BASS.SYNCPROC? = null
     private var syncHandle: Int = 0
@@ -164,72 +164,132 @@ class PlaybackService : MediaSessionService() {
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    fun loadMidi(uriString: String): Boolean {
+    fun loadMedia(uriString: String): Boolean {
         val uri = android.net.Uri.parse(uriString)
         loopRepeatCount = 0
 
-        val cacheSoundFontFile = File(cacheDir, SOUND_FONT_FILE)
-        if (!cacheSoundFontFile.exists()) {
-            return false
+        val isMidi = isMidiUri(uri)
+        if (isMidi) {
+            val cacheSoundFontFile = File(cacheDir, SOUND_FONT_FILE)
+            if (!cacheSoundFontFile.exists()) {
+                return false
+            }
+
+            val cacheMidiFile = File(cacheDir, MIDI_FILE)
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    cacheMidiFile.outputStream().use { output -> input.copyTo(output) }
+                } ?: return false
+            } catch (e: Exception) {
+                return false
+            }
+
+            releaseHandles()
+            handles = bassLoadMidiWithSoundFont(cacheMidiFile.absolutePath, cacheSoundFontFile.absolutePath)
+            val h = handles ?: return false
+            if (h.stream == 0 || h.font == 0) {
+                releaseHandles()
+                return false
+            }
+
+            // Apply effect stuff
+            val (enabled, reverb) = runBlocking {
+                val enabled = SettingsDataStore.effectsEnabledFlow(this@PlaybackService).first()
+                val reverb = SettingsDataStore.reverbStrengthFlow(this@PlaybackService).first()
+                enabled to reverb
+            }
+            setEffectDisabled(!enabled)
+            setReverbStrength(reverb)
+
+            // Apply max voices
+            val maxVoices = runBlocking {
+                val maxVoices = SettingsDataStore.maxVoicesFlow(this@PlaybackService).first()
+                maxVoices
+            }
+            setMaxVoices(maxVoices)
+
+            // Current playing
+            currentUriString = uriString
+            currentTitle = resolveDisplayName(uri)
+
+            // Media3
+            bassPlayer.setMetadata(currentTitle!!, currentArtist, currentArtworkUri)
+            bassPlayer.invalidateFromBass()
+
+            loopPoint = findLoopPoint(cacheMidiFile)
+            val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
+
+            BASS.BASS_ChannelSetAttribute(h.stream, BASS.BASS_ATTRIB_VOL, 1f)
+            BASS.BASS_ChannelFlags(h.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
+            BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
+            BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+
+            syncProc = null
+            if (syncHandle != 0) {
+                BASS.BASS_ChannelRemoveSync(h.stream, syncHandle)
+                syncHandle = 0
+            }
+            loopPoint?.let { lp ->
+                syncProc = BASS.SYNCPROC { _, _, _, _ ->
+                    handlePlaybackBoundary(lp, h.stream)
+                }
+                val syncType: Int
+                val syncParam: Long
+                if (loopEnabledSnapshot && lp.hasLoopStartMarker) {
+                    syncType = BASS.BASS_SYNC_MIXTIME
+                    syncParam = bytes
+                } else {
+                    syncType = BASS.BASS_SYNC_END
+                    syncParam = 0L
+                }
+                syncHandle = BASS.BASS_ChannelSetSync(
+                    h.stream,
+                    syncType,
+                    syncParam,
+                    syncProc,
+                    0
+                )
+            }
+
+            return true
         }
 
-        val cacheMidiFile = File(cacheDir, MIDI_FILE)
+        val cacheAudioFile = resolveCacheAudioFile(uri)
         try {
             contentResolver.openInputStream(uri)?.use { input ->
-                cacheMidiFile.outputStream().use { output -> input.copyTo(output) }
+                cacheAudioFile.outputStream().use { output -> input.copyTo(output) }
             } ?: return false
         } catch (e: Exception) {
             return false
         }
 
         releaseHandles()
-        handles = bassLoadMidiWithSoundFont(cacheMidiFile.absolutePath, cacheSoundFontFile.absolutePath)
-        val h = handles ?: return false
-        if (h.stream == 0 || h.font == 0) {
+        val stream = BASS.BASS_StreamCreateFile(cacheAudioFile.absolutePath, 0, 0, 0)
+        if (stream == 0) {
             releaseHandles()
             return false
         }
+        handles = PlaybackHandles(stream = stream, font = 0, isMidi = false)
 
-        // Apply effect stuff
-        val (enabled, reverb) = runBlocking {
-            val enabled = SettingsDataStore.effectsEnabledFlow(this@PlaybackService).first()
-            val reverb = SettingsDataStore.reverbStrengthFlow(this@PlaybackService).first()
-            enabled to reverb
-        }
-        setEffectDisabled(!enabled)
-        setReverbStrength(reverb)
-
-        // Apply max voices
-        val maxVoices = runBlocking {
-            val maxVoices = SettingsDataStore.maxVoicesFlow(this@PlaybackService).first()
-            maxVoices
-        }
-        setMaxVoices(maxVoices)
-
-        // Current playing
         currentUriString = uriString
         currentTitle = resolveDisplayName(uri)
 
-        // Media3
         bassPlayer.setMetadata(currentTitle!!, currentArtist, currentArtworkUri)
         bassPlayer.invalidateFromBass()
 
-        loopPoint = findLoopPoint(cacheMidiFile)
-        val bytes = BASS.BASS_ChannelGetLength(h.stream, BASS.BASS_POS_BYTE)
+        loopPoint = findLoopPoint(cacheAudioFile)
+        val bytes = BASS.BASS_ChannelGetLength(stream, BASS.BASS_POS_BYTE)
 
-        BASS.BASS_ChannelSetAttribute(h.stream, BASS.BASS_ATTRIB_VOL, 1f)
-        BASS.BASS_ChannelFlags(h.stream, BASS.BASS_SAMPLE_LOOP, BASS.BASS_SAMPLE_LOOP)
-        BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYSEEK, BASSMIDI.BASS_MIDI_DECAYSEEK)
-        BASS.BASS_ChannelFlags(h.stream, BASSMIDI.BASS_MIDI_DECAYEND, BASSMIDI.BASS_MIDI_DECAYEND)
+        BASS.BASS_ChannelSetAttribute(stream, BASS.BASS_ATTRIB_VOL, 1f)
 
         syncProc = null
         if (syncHandle != 0) {
-            BASS.BASS_ChannelRemoveSync(h.stream, syncHandle)
+            BASS.BASS_ChannelRemoveSync(stream, syncHandle)
             syncHandle = 0
         }
         loopPoint?.let { lp ->
             syncProc = BASS.SYNCPROC { _, _, _, _ ->
-                handlePlaybackBoundary(lp, h.stream)
+                handlePlaybackBoundary(lp, stream)
             }
             val syncType: Int
             val syncParam: Long
@@ -241,7 +301,7 @@ class PlaybackService : MediaSessionService() {
                 syncParam = 0L
             }
             syncHandle = BASS.BASS_ChannelSetSync(
-                h.stream,
+                stream,
                 syncType,
                 syncParam,
                 syncProc,
@@ -314,6 +374,7 @@ class PlaybackService : MediaSessionService() {
 
     fun setEffectDisabled(value: Boolean) {
         val h = handles ?: return
+        if (!h.isMidi) return
         val flagsToSet = if (value) BASSMIDI.BASS_MIDI_NOFX else 0
         BASS.BASS_ChannelFlags(
             h.stream,
@@ -324,6 +385,7 @@ class PlaybackService : MediaSessionService() {
 
     fun setReverbStrength(value: Float) {
         handles?.let {
+            if (!it.isMidi) return
             BASS.BASS_ChannelSetAttribute(
                 it.stream,
                 BASSMIDI.BASS_ATTRIB_MIDI_REVERB,
@@ -334,6 +396,7 @@ class PlaybackService : MediaSessionService() {
 
     fun setMaxVoices(value: Int) {
         handles?.let {
+            if (!it.isMidi) return
             BASS.BASS_ChannelSetAttribute(
                 it.stream,
                 BASSMIDI.BASS_ATTRIB_MIDI_VOICES,
@@ -360,7 +423,9 @@ class PlaybackService : MediaSessionService() {
                 volumeSlideSyncHandle = 0
             }
             BASS.BASS_StreamFree(it.stream)
-            BASSMIDI.BASS_MIDI_FontFree(it.font)
+            if (it.isMidi && it.font != 0) {
+                BASSMIDI.BASS_MIDI_FontFree(it.font)
+            }
         }
         loopRepeatCount = 0
         transitionInProgress.set(false)
@@ -401,11 +466,17 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun seekToLoopStart(streamHandle: Int, lp: LoopPoint) {
-        BASS.BASS_ChannelSetPosition(
-            streamHandle,
-            lp.startTick.toLong(),
-            BASSMIDI.BASS_POS_MIDI_TICK or BASSMIDI.BASS_MIDI_DECAYSEEK
-        )
+        if (handles?.isMidi == true) {
+            BASS.BASS_ChannelSetPosition(
+                streamHandle,
+                lp.startTick.toLong(),
+                BASSMIDI.BASS_POS_MIDI_TICK or BASSMIDI.BASS_MIDI_DECAYSEEK
+            )
+        } else {
+            val secs = lp.startMs.coerceAtLeast(0L).toDouble() / 1000.0
+            val bytes = BASS.BASS_ChannelSeconds2Bytes(streamHandle, secs)
+            BASS.BASS_ChannelSetPosition(streamHandle, bytes, BASS.BASS_POS_BYTE)
+        }
         notifyLooped(lp.startMs)
     }
 
@@ -478,7 +549,7 @@ class PlaybackService : MediaSessionService() {
             return
         }
 
-        val loaded = loadMidi(nextUri.toString())
+        val loaded = loadMedia(nextUri.toString())
         if (loaded) {
             mainHandler.post {
                 play()
@@ -504,7 +575,7 @@ class PlaybackService : MediaSessionService() {
             return
         }
 
-        val loaded = loadMidi(previousUri.toString())
+        val loaded = loadMedia(previousUri.toString())
         if (loaded) {
             mainHandler.post {
                 play()
@@ -596,10 +667,33 @@ class PlaybackService : MediaSessionService() {
         val selection = (
             "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
                 "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.MIME_TYPE}=? OR " +
+                "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
+                "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
+                "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
                 "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
                 "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
             )
-        val selectionArgs = arrayOf("audio/midi", "audio/x-midi", "%.mid", "%.midi")
+        val selectionArgs = arrayOf(
+            "audio/midi",
+            "audio/x-midi",
+            "audio/ogg",
+            "application/ogg",
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/wav",
+            "audio/x-wav",
+            "%.mid",
+            "%.midi",
+            "%.ogg",
+            "%.mp3",
+            "%.wav"
+        )
         val sortOrder = "${MediaStore.Files.FileColumns.DISPLAY_NAME} ASC"
 
         val rows = mutableListOf<Pair<String, Uri>>()
@@ -690,7 +784,7 @@ class PlaybackService : MediaSessionService() {
         BASS.BASS_Free()
     }
 
-    private fun bassLoadMidiWithSoundFont(midiPath: String, sf2Path: String): MidiHandles {
+    private fun bassLoadMidiWithSoundFont(midiPath: String, sf2Path: String): PlaybackHandles {
         val soundFontHandle = BASSMIDI.BASS_MIDI_FontInit(sf2Path, 0)
         val stream = BASSMIDI.BASS_MIDI_StreamCreateFile(midiPath, 0, 0, 0, 0)
         val fonts = arrayOf(
@@ -701,7 +795,7 @@ class PlaybackService : MediaSessionService() {
             }
         )
         BASSMIDI.BASS_MIDI_StreamSetFonts(stream, fonts, 1)
-        return MidiHandles(stream, soundFontHandle)
+        return PlaybackHandles(stream = stream, font = soundFontHandle, isMidi = true)
     }
 
     fun getCurrentUriString(): String? = currentUriString
@@ -718,6 +812,22 @@ class PlaybackService : MediaSessionService() {
             }
 
         return uri.lastPathSegment?.substringAfterLast('/') ?: getString(R.string.unknown)
+    }
+
+    private fun isMidiUri(uri: android.net.Uri): Boolean {
+        val mime = contentResolver.getType(uri)?.lowercase()
+        if (mime == "audio/midi" || mime == "audio/x-midi" || mime == "application/midi" || mime == "application/x-midi") {
+            return true
+        }
+        val name = resolveDisplayName(uri).lowercase()
+        return name.endsWith(".mid") || name.endsWith(".midi")
+    }
+
+    private fun resolveCacheAudioFile(uri: android.net.Uri): File {
+        val name = resolveDisplayName(uri)
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val suffix = if (ext.isNotBlank()) ".$ext" else ".audio"
+        return File(cacheDir, "audio_track$suffix")
     }
 
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
@@ -816,10 +926,150 @@ class PlaybackService : MediaSessionService() {
         private const val LOOP_REPEAT_BEFORE_FADE_COUNT = 1
         private const val FADE_OUT_DURATION_MS = 8000
 
-        fun findLoopPoint(midiFile: File): LoopPoint {
+        fun findLoopPoint(mediaFile: File): LoopPoint {
             val loopPoint = LoopPoint()
             try {
-                midiFile.inputStream().use { inputStream ->
+                val name = mediaFile.name.lowercase()
+                if (name.endsWith(".ogg")) {
+                    val data = mediaFile.readBytes()
+                    val packets = mutableListOf<ByteArray>()
+                    val packetBuffer = java.io.ByteArrayOutputStream()
+                    var idx = 0
+                    var serial: Int? = null
+
+                    fun readIntLE(offset: Int): Int {
+                        if (offset + 4 > data.size) return 0
+                        return (data[offset].toInt() and 0xFF) or
+                            ((data[offset + 1].toInt() and 0xFF) shl 8) or
+                            ((data[offset + 2].toInt() and 0xFF) shl 16) or
+                            ((data[offset + 3].toInt() and 0xFF) shl 24)
+                    }
+
+                    while (idx + 27 <= data.size) {
+                        if (data[idx] != 'O'.code.toByte() ||
+                            data[idx + 1] != 'g'.code.toByte() ||
+                            data[idx + 2] != 'g'.code.toByte() ||
+                            data[idx + 3] != 'S'.code.toByte()
+                        ) {
+                            break
+                        }
+
+                        val pageSegments = data[idx + 26].toInt() and 0xFF
+                        val headerSize = 27 + pageSegments
+                        if (idx + headerSize > data.size) break
+
+                        val pageSerial = readIntLE(idx + 14)
+                        if (serial == null) serial = pageSerial
+                        val segmentTableStart = idx + 27
+                        val bodyStart = idx + headerSize
+
+                        var bodyLen = 0
+                        for (i in 0 until pageSegments) {
+                            bodyLen += data[segmentTableStart + i].toInt() and 0xFF
+                        }
+                        if (bodyStart + bodyLen > data.size) break
+
+                        if (pageSerial == serial) {
+                            var bodyOffset = 0
+                            for (i in 0 until pageSegments) {
+                                val segSize = data[segmentTableStart + i].toInt() and 0xFF
+                                if (segSize > 0) {
+                                    packetBuffer.write(data, bodyStart + bodyOffset, segSize)
+                                }
+                                bodyOffset += segSize
+                                if (segSize < 255) {
+                                    packets.add(packetBuffer.toByteArray())
+                                    packetBuffer.reset()
+                                }
+                            }
+                        }
+
+                        idx = bodyStart + bodyLen
+                        if (packets.size >= 3) break
+                    }
+
+                    var sampleRate = 0
+                    var loopStartSamples: Long? = null
+                    var loopEndSamples: Long? = null
+                    var loopLengthSamples: Long? = null
+
+                    for (packet in packets) {
+                        if (packet.size < 7) continue
+                        if (packet[0].toInt() == 0x01 &&
+                            packet[1] == 'v'.code.toByte() &&
+                            packet[2] == 'o'.code.toByte() &&
+                            packet[3] == 'r'.code.toByte() &&
+                            packet[4] == 'b'.code.toByte() &&
+                            packet[5] == 'i'.code.toByte() &&
+                            packet[6] == 's'.code.toByte()
+                        ) {
+                            if (packet.size >= 16) {
+                                sampleRate = (packet[12].toInt() and 0xFF) or
+                                    ((packet[13].toInt() and 0xFF) shl 8) or
+                                    ((packet[14].toInt() and 0xFF) shl 16) or
+                                    ((packet[15].toInt() and 0xFF) shl 24)
+                            }
+                        }
+                        if (packet[0].toInt() == 0x03 &&
+                            packet[1] == 'v'.code.toByte() &&
+                            packet[2] == 'o'.code.toByte() &&
+                            packet[3] == 'r'.code.toByte() &&
+                            packet[4] == 'b'.code.toByte() &&
+                            packet[5] == 'i'.code.toByte() &&
+                            packet[6] == 's'.code.toByte()
+                        ) {
+                            var p = 7
+                            if (p + 4 > packet.size) continue
+                            val vendorLen = (packet[p].toInt() and 0xFF) or
+                                ((packet[p + 1].toInt() and 0xFF) shl 8) or
+                                ((packet[p + 2].toInt() and 0xFF) shl 16) or
+                                ((packet[p + 3].toInt() and 0xFF) shl 24)
+                            p += 4 + vendorLen
+                            if (p + 4 > packet.size) continue
+                            val commentCount = (packet[p].toInt() and 0xFF) or
+                                ((packet[p + 1].toInt() and 0xFF) shl 8) or
+                                ((packet[p + 2].toInt() and 0xFF) shl 16) or
+                                ((packet[p + 3].toInt() and 0xFF) shl 24)
+                            p += 4
+                            for (_i in 0 until commentCount) {
+                                if (p + 4 > packet.size) break
+                                val length = (packet[p].toInt() and 0xFF) or
+                                    ((packet[p + 1].toInt() and 0xFF) shl 8) or
+                                    ((packet[p + 2].toInt() and 0xFF) shl 16) or
+                                    ((packet[p + 3].toInt() and 0xFF) shl 24)
+                                p += 4
+                                if (p + length > packet.size) break
+                                val comment = packet.copyOfRange(p, p + length).toString(Charsets.UTF_8)
+                                p += length
+                                val eq = comment.indexOf('=')
+                                if (eq <= 0) continue
+                                val key = comment.substring(0, eq).trim().uppercase()
+                                val value = comment.substring(eq + 1).trim()
+                                when (key) {
+                                    "LOOPSTART" -> loopStartSamples = value.toLongOrNull()
+                                    "LOOPEND" -> loopEndSamples = value.toLongOrNull()
+                                    "LOOPLENGTH" -> loopLengthSamples = value.toLongOrNull()
+                                }
+                            }
+                        }
+                    }
+
+                    if (loopStartSamples != null && sampleRate > 0) {
+                        loopPoint.hasLoopStartMarker = true
+                        loopPoint.startMs = (loopStartSamples!! * 1000L) / sampleRate
+                        val resolvedEnd = loopEndSamples ?: loopLengthSamples?.let { loopStartSamples!! + it }
+                        if (resolvedEnd != null) {
+                            loopPoint.endMs = (resolvedEnd * 1000L) / sampleRate
+                        }
+                    }
+                    return loopPoint
+                }
+
+                if (!name.endsWith(".mid") && !name.endsWith(".midi")) {
+                    return loopPoint
+                }
+
+                mediaFile.inputStream().use { inputStream ->
                     val bytes = inputStream.readBytes().toList()
                     val music = Midi1Music().apply { read(bytes) }
 
@@ -892,7 +1142,8 @@ data class LoopPoint(
     var hasLoopStartMarker: Boolean = false,
 )
 
-data class MidiHandles(
+data class PlaybackHandles(
     val stream: Int,
-    val font: Int
+    val font: Int,
+    val isMidi: Boolean
 )
