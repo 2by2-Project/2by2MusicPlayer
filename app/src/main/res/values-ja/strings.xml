@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">2by2 Music Player</string>
+    <string name="app_name">2by2 MIDI Player</string>
     <string name="error_soundfont_not_set">サウンドフォントが未設定です。右上のボタンから設定画面を開き、サウンドフォントを設定してください。</string>
     <string name="error_playback_service_not_ready">Playback serviceの初期化に失敗しました</string>
     <string name="error_failed_to_load_midi">MIDIまたはサウンドフォントの読み込みに失敗しました</string>

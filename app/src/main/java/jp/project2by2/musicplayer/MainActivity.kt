@@ -99,6 +99,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -453,7 +454,8 @@ fun MusicPlayerMainScreen(
                         Image(
                             painter = painterResource(id = R.drawable.logo_image),
                             contentDescription = stringResource(id = R.string.app_logo),
-                            modifier = Modifier.height(48.dp)
+                            modifier = Modifier.height(48.dp),
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary)
                         )
                     }
                 },
